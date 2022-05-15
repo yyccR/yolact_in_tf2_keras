@@ -1,4 +1,5 @@
 import tensorflow as tf
+import torch
 
 
 class BottleneckLayer(tf.keras.layers.Layer):
@@ -9,12 +10,14 @@ class BottleneckLayer(tf.keras.layers.Layer):
                  norm_layer=tf.keras.layers.BatchNormalization,
                  dilation=1):
         super(BottleneckLayer, self).__init__()
-        self.conv1 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=1, use_bias=False, dilation_rate=dilation)
+        self.conv1 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=1, use_bias=False,
+                                            dilation_rate=dilation)
         self.bn1 = norm_layer()
-        self.conv2 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=3, strides=strides, padding=dilation,
+        self.conv2 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=3, strides=strides, padding='same',
                                             use_bias=False, dilation_rate=dilation)
         self.bn2 = norm_layer()
-        self.conv3 = tf.keras.layers.Conv2D(filters=output_channels * 4, kernel_size=1, use_bias=False,dilation_rate=dilation)
+        self.conv3 = tf.keras.layers.Conv2D(filters=output_channels * 4, kernel_size=1, use_bias=False,
+                                            dilation_rate=dilation)
         self.bn3 = norm_layer()
         self.relu = tf.keras.layers.ReLU()
         self.downsample = downsample
@@ -45,10 +48,12 @@ class BottleneckLayer(tf.keras.layers.Layer):
 
 class ResnetBackbone:
     def __init__(self,
+                 input_shape=[480, 480, 3],
                  layers=[3, 4, 23, 3],
                  atrous_layers=[],
                  block=BottleneckLayer,
                  norm_layer=tf.keras.layers.BatchNormalization):
+        self.input_shape = input_shape
         self.num_base_layers = len(layers)
         self.layers = []
         self.channels = []
@@ -66,7 +71,7 @@ class ResnetBackbone:
                 self.dilation += 1
                 stride = 1
             downsample = tf.keras.Sequential([
-                tf.keras.layers.Conv2D(filters=output_channels*4,
+                tf.keras.layers.Conv2D(filters=output_channels * 4,
                                        kernel_size=1,
                                        strides=stride,
                                        use_bias=False,
@@ -82,20 +87,22 @@ class ResnetBackbone:
         self.channels.append(output_channels * 4)
         return layers
 
-    def build_graph(self, input):
+    def build_graph(self):
         """resnet"""
-        x = tf.keras.layers.Conv2D(filters=64, kernel_size=7, strides=2, padding=3, use_bias=False)(input)
+        input = tf.keras.layers.Input(shape=self.input_shape)
+        x = tf.keras.layers.Conv2D(filters=64, kernel_size=7, strides=2, padding='same', use_bias=False)(input)
         x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.ReLU()(x)
-        x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2, padding=1)(x)
+        x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2, padding='same')(x)
 
-        x = self._make_layer(output_channels=64, blocks=3)(x)
-        x = self._make_layer(output_channels=128, blocks=4, stride=2)(x)
-        x = self._make_layer(output_channels=256, blocks=23, stride=2)(x)
-        x = self._make_layer(output_channels=512, blocks=3, stride=2)(x)
+        C2 = x = self._make_layer(output_channels=64, blocks=3)(x)
+        C3 = x = self._make_layer(output_channels=128, blocks=4, stride=2)(x)
+        C4 = x = self._make_layer(output_channels=256, blocks=23, stride=2)(x)
+        C5 = x = self._make_layer(output_channels=512, blocks=3, stride=2)(x)
+        model = tf.keras.models.Model(inputs=input, outputs=[C2, C3, C4, C5])
+        return model
 
-        x = self._make_layer(output_channels=1024 // 4, blocks=1, stride=2)(x)
-        x = self._make_layer(output_channels=1024 // 4, blocks=1, stride=2)(x)
-        x = self._make_layer(output_channels=1024 // 4, blocks=1, stride=2)(x)
-        x = self._make_layer(output_channels=1024 // 4, blocks=1, stride=2)(x)
-        return x
+if __name__ == "__main__":
+    resnet = ResnetBackbone()
+    model = resnet.build_graph()
+    model.summary(line_length=100)
