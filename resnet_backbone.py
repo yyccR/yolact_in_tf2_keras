@@ -1,6 +1,6 @@
-import tensorflow as tf
-import torch
 
+
+import tensorflow as tf
 
 class BottleneckLayer(tf.keras.layers.Layer):
     def __init__(self,
@@ -48,7 +48,7 @@ class BottleneckLayer(tf.keras.layers.Layer):
 
 class ResnetBackbone:
     def __init__(self,
-                 input_shape=[480, 480, 3],
+                 input_shape=[550, 550, 3],
                  layers=[3, 4, 23, 3],
                  atrous_layers=[],
                  block=BottleneckLayer,
