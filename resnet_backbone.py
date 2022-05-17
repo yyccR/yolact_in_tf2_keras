@@ -48,7 +48,7 @@ class BottleneckLayer(tf.keras.layers.Layer):
 
 class ResnetBackbone:
     def __init__(self,
-                 input_shape=[550, 550, 3],
+                 input_shape=[640, 640, 3],
                  layers=[3, 4, 23, 3],
                  atrous_layers=[],
                  block=BottleneckLayer,
@@ -90,16 +90,22 @@ class ResnetBackbone:
     def build_graph(self):
         """resnet"""
         input = tf.keras.layers.Input(shape=self.input_shape)
+        # 1/2
         x = tf.keras.layers.Conv2D(filters=64, kernel_size=7, strides=2, padding='same', use_bias=False)(input)
         x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.ReLU()(x)
+        # 1/4
         x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2, padding='same')(x)
 
+        # 1/4
         C2 = x = self._make_layer(output_channels=64, blocks=3)(x)
+        # 1/8
         C3 = x = self._make_layer(output_channels=128, blocks=4, stride=2)(x)
+        # 1/16
         C4 = x = self._make_layer(output_channels=256, blocks=23, stride=2)(x)
+        # 1/32
         C5 = x = self._make_layer(output_channels=512, blocks=3, stride=2)(x)
-        model = tf.keras.models.Model(inputs=input, outputs=[C2, C3, C4, C5])
+        model = tf.keras.models.Model(inputs=input, outputs=[C3, C4, C5])
         return model
 
 if __name__ == "__main__":
