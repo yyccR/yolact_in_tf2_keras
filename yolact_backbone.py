@@ -55,7 +55,7 @@ class ResnetBackbone:
                  norm_layer=tf.keras.layers.BatchNormalization):
         self.input_shape = input_shape
         self.num_base_layers = len(layers)
-        self.layers = []
+        self.layers = layers
         self.channels = []
         self.norm_layer = norm_layer
         self.dilation = 1
@@ -98,13 +98,13 @@ class ResnetBackbone:
         x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2, padding='same')(x)
 
         # 1/4
-        C2 = x = self._make_layer(output_channels=64, blocks=3)(x)
+        C2 = x = self._make_layer(output_channels=64, blocks=self.layers[0])(x)
         # 1/8
-        C3 = x = self._make_layer(output_channels=128, blocks=4, stride=2)(x)
+        C3 = x = self._make_layer(output_channels=128, blocks=self.layers[1], stride=2)(x)
         # 1/16
-        C4 = x = self._make_layer(output_channels=256, blocks=23, stride=2)(x)
+        C4 = x = self._make_layer(output_channels=256, blocks=self.layers[2], stride=2)(x)
         # 1/32
-        C5 = x = self._make_layer(output_channels=512, blocks=3, stride=2)(x)
+        C5 = x = self._make_layer(output_channels=512, blocks=self.layers[3], stride=2)(x)
         model = tf.keras.models.Model(inputs=input, outputs=[C3, C4, C5])
         return model
 
