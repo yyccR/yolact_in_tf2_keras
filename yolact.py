@@ -33,6 +33,7 @@ class Yolact:
             [self.input_shape[0] / 128, self.input_shape[1] / 128],
         ]
         for i, (feature_h, feature_w) in enumerate(features_size):
+            priors = []
             scale = self.scales[i]
             for j, i in product(range(feature_h), range(feature_w)):
                 x = (i + 0.5) / feature_w
@@ -42,8 +43,9 @@ class Yolact:
                     # h = scale / ar / self.image_size
                     # This is for backward compatability with a bug where I made everything square by accident
                     h = w
-                    self.feature_prior_data.append([x, y, w, h])
-        self.feature_prior_data = np.array(self.feature_prior_data, dtype=np.float32)
+                    priors.append([x, y, w, h])
+        self.feature_prior_data.append(np.array(priors, dtype=np.float32))
+        self.feature_prior_data = np.concatenate(self.feature_prior_data, axis=0)
 
     def backbone(self, input):
         """resnet backbone
@@ -120,7 +122,7 @@ class Yolact:
     def head(self, inputs):
         """ head prediction after fpn.
         :param inputs: [P3, P4, P5, P6, P7]
-        :return:
+        :return:[box, cls, mask] (shape:[batch,-1,4],[batch, -1, cls_nums],[batch,-1,mask_proto_channels])
         """
         P3, P4, P5, P6, P7 = inputs
         head3 = self.head(P3)
@@ -129,16 +131,45 @@ class Yolact:
         head6 = self.head(P6)
         head7 = self.head(P7)
 
+        head_box_pred = tf.keras.layers.Concatenate(axis=-2)([
+            head3[0], head4[0], head5[0], head6[0], head7[0]
+        ])
+        head_cls_pred = tf.keras.layers.Concatenate(axis=-2)([
+            head3[1], head4[1], head5[1], head6[1], head7[1]
+        ])
+        head_mask_pred = tf.keras.layers.Concatenate(axis=-2)([
+            head3[2], head4[2], head5[2], head6[2], head7[2]
+        ])
+        return [head_box_pred, head_cls_pred, head_mask_pred]
+
+    def detect(self, box_pred, cls_pred, mask_pred, proto_pred):
+        """
+        :param box_pred: [batch, num_priors, 4]
+        :param cls_pred: [batch, num_priors, num_classes]
+        :param mask_pred: [batch, num_priors, mask_dim]
+        :param proto_pred: [batch, mask_h, mask_w, mask_dim]
+        :return:  class idx, confidence, bbox coords, mask
+                 (batch_size, top_k, 1 + 1 + 4 + mask_dim)
+        """
+
 
 
     def build_graph(self):
+        """
+                       ↑------> mask_proto  ---↓
+        构图 backbone->fpn----->   head      ------>
+        :return:
+        """
         inputs = tf.keras.layers.Input(shape=self.input_shape)
-        # [C3, C4, C5] (shape:[1/8, 1/16, 1/32])
+        # [C3, C4, C5] shape:[1/8, 1/16, 1/32]
         backbones = self.backbone(inputs)
-        # [P3, P4, P5, P6, P7] (shape:[1/8, 1/16, 1/32, 1/64, 1/128])
+        # [P3, P4, P5, P6, P7] shape:[1/8, 1/16, 1/32, 1/64, 1/128]
         fpns = self.fpn(backbones)
-        # [batch, 1/4, 1/4, 32]
+        # mask shape:[batch, 1/4, 1/4, 32]
         mask_proto = self.proto(fpns[0])
+        semantic_seg_conv = tf.keras.layers.Conv2D(self.num_classes-1, kernel_size=1)(fpns[0])
+        # [box, cls, mask] shape:[batch,-1,4],[batch, -1, cls_nums],[batch,-1,mask_proto_channels]
+        heads = self.head(fpns)
 
         model = tf.keras.Model(inputs=inputs, outputs=fpns)
         return model
