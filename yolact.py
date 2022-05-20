@@ -11,12 +11,18 @@ class Yolact:
                  num_classes=90,
                  mask_proto_channels=32,
                  aspect_ratios=[1, 0.5, 2],
-                 scales = [24, 48, 96, 192, 384]):
+                 scales = [24, 48, 96, 192, 384],
+                 conf_thres=0.05,
+                 nms_thres=0.5,
+                 max_num_detections=100):
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.mask_proto_channels = mask_proto_channels
         self.aspect_ratios = aspect_ratios
         self.scales = scales
+        self.conf_thres = conf_thres
+        self.nms_thres = nms_thres
+        self.max_num_detections =max_num_detections
         self.feature_prior_data = []
         # 预生成基础坐标信息
         self.make_priors()
@@ -46,6 +52,55 @@ class Yolact:
                     priors.append([x, y, w, h])
         self.feature_prior_data.append(np.array(priors, dtype=np.float32))
         self.feature_prior_data = np.concatenate(self.feature_prior_data, axis=0)
+
+    def nms(self, boxes, masks, scores, iou_threshold=0.5, conf_thresh=0.05):
+        import pyximport
+        pyximport.install(setup_args={"include_dirs":np.get_include()}, reload_support=True)
+
+        from utils.cython_nms import nms as cnms
+
+        num_classes = scores.size(0)
+
+        idx_lst = []
+        cls_lst = []
+        scr_lst = []
+
+        # Multiplying by max_size is necessary because of how cnms computes its area and intersections
+        boxes = boxes * self.input_shape[0]
+
+        for _cls in range(num_classes):
+            cls_scores = scores[_cls, :]
+            conf_mask = cls_scores > conf_thresh
+            idx = tf.range(cls_scores.size(0), device=boxes.device)
+
+            cls_scores = cls_scores[conf_mask]
+            idx = idx[conf_mask]
+
+            if cls_scores.size(0) == 0:
+                continue
+
+            preds = tf.concat([boxes[conf_mask], cls_scores[:, None]], dim=1).cpu().numpy()
+            keep = cnms(preds, iou_threshold)
+            # keep = torch.Tensor(keep, device=boxes.device).long()
+
+            idx_lst.append(idx[keep])
+            cls_lst.append(keep * 0 + _cls)
+            scr_lst.append(cls_scores[keep])
+
+        idx = tf.concat(idx_lst, dim=0)
+        classes = tf.concat(cls_lst, dim=0)
+        scores = tf.concat(scr_lst, dim=0)
+
+        scores, idx2 = scores.sort(0, descending=True)
+        idx2 = idx2[:self.max_num_detections]
+        scores = scores[:self.max_num_detections]
+
+        idx = idx[idx2]
+        classes = classes[idx2]
+
+        # Undo the multiplication above
+        return boxes[idx] / self.input_shape[0], masks[idx], classes, scores
+
 
     def backbone(self, input):
         """resnet backbone
@@ -137,6 +192,7 @@ class Yolact:
         head_cls_pred = tf.keras.layers.Concatenate(axis=-2)([
             head3[1], head4[1], head5[1], head6[1], head7[1]
         ])
+        head_cls_pred = tf.keras.layers.Softmax()(head_cls_pred)
         head_mask_pred = tf.keras.layers.Concatenate(axis=-2)([
             head3[2], head4[2], head5[2], head6[2], head7[2]
         ])
@@ -151,13 +207,19 @@ class Yolact:
         :return:  class idx, confidence, bbox coords, mask
                  (batch_size, top_k, 1 + 1 + 4 + mask_dim)
         """
-
+        box = tf.concat([
+            self.feature_prior_data[:,:2] + box_pred[:,:,:2] * 0.1 * self.feature_prior_data[:,2:],
+            self.feature_prior_data[:,2:] * tf.exp(box_pred[:,:,2:] * 0.2)
+        ], axis=-1)
+        box_xy = box[:,2:] - box[:,2:] / 2
+        box_wh = box[:,2:] + box_xy
+        box = tf.concat([box_xy, box_wh], axis=-1)
 
 
     def build_graph(self):
         """
                        ↑------> mask_proto  ---↓
-        构图 backbone->fpn----->   head      ------>
+        构图 backbone->fpn----->   head      ----->
         :return:
         """
         inputs = tf.keras.layers.Input(shape=self.input_shape)
