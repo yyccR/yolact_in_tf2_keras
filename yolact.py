@@ -1,5 +1,6 @@
 
 from itertools import product
+import math
 import numpy as np
 import tensorflow as tf
 from yolact_backbone import ResnetBackbone
@@ -9,6 +10,7 @@ class Yolact:
     def __init__(self,
                  input_shape=[640, 640, 3],
                  num_classes=90,
+                 is_training=True,
                  mask_proto_channels=32,
                  aspect_ratios=[1, 0.5, 2],
                  scales = [24, 48, 96, 192, 384],
@@ -17,6 +19,7 @@ class Yolact:
                  max_num_detections=100):
         self.input_shape = input_shape
         self.num_classes = num_classes
+        self.is_training = is_training
         self.mask_proto_channels = mask_proto_channels
         self.aspect_ratios = aspect_ratios
         self.scales = scales
@@ -45,7 +48,7 @@ class Yolact:
                 x = (i + 0.5) / feature_w
                 y = (j + 0.5) / feature_h
                 for ar in self.aspect_ratios:
-                    w = scale * ar / self.input_shape[0]
+                    w = scale * math.sqrt(ar) / self.input_shape[0]
                     # h = scale / ar / self.image_size
                     # This is for backward compatability with a bug where I made everything square by accident
                     h = w
@@ -229,11 +232,17 @@ class Yolact:
         fpns = self.fpn(backbones)
         # mask shape:[batch, 1/4, 1/4, 32]
         mask_proto = self.proto(fpns[0])
-        semantic_seg_conv = tf.keras.layers.Conv2D(self.num_classes-1, kernel_size=1)(fpns[0])
         # [box, cls, mask] shape:[batch,-1,4],[batch, -1, cls_nums],[batch,-1,mask_proto_channels]
         heads = self.head(fpns)
+        if self.is_training:
+            # semantic segments shape:[batch, 1/8, 1/8, classes-1]
+            semantic_seg_conv = tf.keras.layers.Conv2D(self.num_classes-1, kernel_size=1)(fpns[0])
+            # box, cls, mask, semantic
+            model = tf.keras.Model(inputs=inputs, outputs=[*heads, semantic_seg_conv])
+        else:
+            softmax_cls = tf.keras.layers.Softmax()(heads[1])
 
-        model = tf.keras.Model(inputs=inputs, outputs=fpns)
+
         return model
 
 
