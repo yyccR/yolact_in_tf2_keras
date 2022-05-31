@@ -54,7 +54,10 @@ class Yolact:
                     h = w
                     priors.append([x, y, w, h])
         self.feature_prior_data.append(np.array(priors, dtype=np.float32))
+        # [-1, 4]
         self.feature_prior_data = np.concatenate(self.feature_prior_data, axis=0)
+        # [1, -1, 4]
+        self.feature_prior_data = np.expand_dims(self.feature_prior_data,axis=0)
 
     def nms(self, boxes, masks, scores, iou_threshold=0.5, conf_thresh=0.05):
         import pyximport
