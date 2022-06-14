@@ -3,8 +3,11 @@ import tensorflow as tf
 
 
 class HeadLayer(tf.keras.layers.Layer):
-    def __init__(self):
+    def __init__(self,aspect_ratios, num_classes, mask_proto_channels):
         super(HeadLayer, self).__init__()
+        self.aspect_ratios = aspect_ratios
+        self.num_classes = num_classes
+        self.mask_proto_channels = mask_proto_channels
         self.conv1 = tf.keras.layers.Conv2D(256, kernel_size=3, padding='same')
         self.relu1 = tf.keras.layers.ReLU()
         self.conv_box = tf.keras.layers.Conv2D(len(self.aspect_ratios)*4,kernel_size=3, padding='same')
