@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from yolact_backbone import ResnetBackbone
 from yolact_head import HeadLayer
-from yolact_detect import decode, nms
+from box_utils import decode, nms
 
 class Yolact:
     def __init__(self,
@@ -42,7 +42,6 @@ class Yolact:
             [self.input_shape[0] / 64, self.input_shape[1] / 64],
             [self.input_shape[0] / 128, self.input_shape[1] / 128],
         ]
-        print(features_size)
         for i, (feature_h, feature_w) in enumerate(features_size):
             priors = []
             scale = self.scales[i]
@@ -59,7 +58,7 @@ class Yolact:
         # [-1, 4]
         self.feature_prior_data = np.concatenate(self.feature_prior_data, axis=0)
         # [1, -1, 4]
-        self.feature_prior_data = np.expand_dims(self.feature_prior_data,axis=0)
+        # self.feature_prior_data = np.expand_dims(self.feature_prior_data,axis=0)
 
     def backbone(self, input):
         """resnet backbone
@@ -173,10 +172,10 @@ class Yolact:
         # [box, cls, mask] shape:[batch,-1,4],[batch, -1, cls_nums],[batch,-1,mask_proto_channels]
         heads = self.head(fpns)
         if self.is_training:
-            # semantic segments shape:[batch, 1/8, 1/8, classes-1]
-            semantic_seg_conv = tf.keras.layers.Conv2D(self.num_classes-1, kernel_size=1)(fpns[0])
+            # semantic segments shape:[batch, 1/8, 1/8, classes]
+            semantic_seg = tf.keras.layers.Conv2D(self.num_classes, kernel_size=1)(fpns[0])
             # box, cls, mask, semantic
-            model = tf.keras.Model(inputs=inputs, outputs=[*heads, mask_proto, semantic_seg_conv])
+            model = tf.keras.Model(inputs=inputs, outputs=[*heads, mask_proto, semantic_seg])
         else:
             # box_pred:[batch,-1,4], feature_prior_data:[1, -1, 4]
             decode_boxes = decode(heads[0], self.feature_prior_data)
