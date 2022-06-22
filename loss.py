@@ -1,4 +1,3 @@
-
 import cv2
 import numpy as np
 import tensorflow as tf
@@ -6,16 +5,22 @@ from box_utils import iou, decode, match
 
 
 class MultiBoxLoss:
-    def __init__(self, batch_size, priors, conf_alpha=1, bbox_alpha=1.5, mask_alpha=6.125, pos_thresh=0.5, neg_thresh=0.4, masks_to_train=100):
+    def __init__(self,
+                 batch_size, num_classes, priors, conf_alpha=1, bbox_alpha=1.5,
+                 semantic_segmentation_alpha = 1, mask_alpha=6.125, pos_thresh=0.5,
+                 neg_thresh=0.4, masks_to_train=100, ohem_negpos_ratio=3):
         self.batch_size = batch_size
+        self.num_classes = num_classes
         # [num_priors, 4]
         self.priors = priors
         self.conf_alpha = conf_alpha
         self.bbox_alpha = bbox_alpha
         self.mask_alpha = mask_alpha
+        self.semantic_segmentation_alpha = semantic_segmentation_alpha
         self.pos_thresh = pos_thresh
         self.neg_thresh = neg_thresh
         self.masks_to_train = masks_to_train
+        self.ohem_negpos_ratio = ohem_negpos_ratio
 
     def smooth_l1_loss(self, loc_p, loc_t):
         """计算目标边框损失"""
@@ -26,51 +31,92 @@ class MultiBoxLoss:
         loss = np.sum(loss)
         return loss
 
-    def lincomb_mask_loss(self, gt_loc_all, gt_boxes, gt_masks, gt_labels, batch_positive_idx, batch_best_truth_idx, pred_mask_proto, pred_masks):
-        """ 计算mask损失
-        :param gt_loc_all: [batch, num_priors, 4(cx,cy,cw,ch)]
-        :param gt_boxes: [batch, num_boxes, 4(x1,y1,x2,y2)]
-        :param gt_masks: [batch, h, w, num_objs]
-        :param gt_labels: [batch, num_objs]
-        :param batch_positive_idx: [batch, num_priors]
-        :param batch_best_truth_idx: [batch, num_priors]
-        :param pred_mask_proto: [batch, 1/4, 1/4, 32]
-        :param pred_masks: [batch, num_priors, 32]
+    def ohem_conf_loss(self, conf_data, conf_t, pos, num):
+        """ 计算分类损失
+        :param conf_data: [batch, num_priors, num_classes]
+        :param conf_t: [batch, num_objs]
+        :param pos:
+        :param num:
         :return:
         """
-        mask_h, mask_w = pred_mask_proto.shape[1:3]
+        # Compute max conf across batch for hard negative mining
+        batch_conf = conf_data.view(-1, self.num_classes)
+        # conf_max = np.max(batch_conf)
+        # loss_c = np.log(np.sum(np.exp(batch_conf-conf_max), 1)) + conf_max - batch_conf[:, 0]
+        # loss_c = log_sum_exp(batch_conf) - batch_conf[:, 0]
+        batch_conf = tf.math.softmax(batch_conf, dim=1)
+        loss_c = np.max(batch_conf[:, 1:], axis=1)
 
-        for i in range(self.batch_size):
-            # [h,w,num_objs] => [1/4, 1/4, num_objs] => [num_objs, 1/4, 1/4]
-            cur_gt_masks_resize = tf.image.resize(gt_masks[i], size=(mask_h, mask_w), method=tf.image.ResizeMethod.BILINEAR)
-            cur_gt_masks_resize = np.array(cur_gt_masks_resize > 0.5, dtype=np.float32).transpose([2,0,1])
+        # Hard Negative Mining
+        loss_c = loss_c.view(num, -1)
+        # 过滤掉正样本
+        loss_c[pos] = 0
+        # 过滤掉容易分的负样本
+        loss_c[conf_t < 0] = 0
+        # loss_c = -np.sort(-loss_c, axis=1)
 
-            # 正样本(conf>0)的索引
-            pos_idx = batch_positive_idx[i]
-            # 正样本边框(conf>0)的索引, 每个prior对应一个边框
-            best_truth_pos_idx = batch_best_truth_idx[i][pos_idx]
+        # 从大到小排序, 拿到下标索引
+        loss_idx = np.argsort(-loss_c, axis=1)
+        # _, loss_idx = loss_c.sort(1, descending=True)
+        # 从小到大排序, 拿到[0~num_priors]每个索引对应的loss排序值,比如第一位loss排在18，第二位排到了300,
+        # 那么如果只拿前100个负样本计算损失的话，第二位的排名大于100不会被采用
+        idx_rank = np.argsort(loss_idx, axis=1)
+        # _, idx_rank = loss_idx.sort(1)
+        # num_pos = pos.long().sum(1, keepdim=True)
+        num_pos = np.sum(pos, axis=1)
 
-            # pos_gt_box = pos_gt_decode(loc_all[i], self.priors)[pos_idx]
-            cur_pos_gt_box = gt_boxes[i][pos_idx]
+        # num_neg = torch.clamp(self.ohem_negpos_ratio * num_pos, max=pos.size(1) - 1)
+        # 计算负样本个数, 这里负样本为正样本3倍,并且不超过原样本总数
+        num_neg = np.clip(self.ohem_negpos_ratio * num_pos, a_max=pos.size(1) - 1)
+        # 先对loss_c从大到小排序, 得到排序下标索引, 再对这个排序下标索引从小到大排序拿到索引
+        # neg = idx_rank < num_neg.expand_as(idx_rank)
+        neg = idx_rank < np.broadcast_to(num_neg, idx_rank.shape)
 
-            if pos_idx.size(0) == 0:
-                continue
+        # 去掉那些正样本和容易分的负样本 pos为conf_t>0的，还有conf_t=0和conf_t=-1的，-1的是容易分的负样本
+        neg[pos] = 0
+        neg[conf_t < 0] = 0
 
-            # [1/4, 1/4, 32]
-            cur_pred_mask_proto = pred_mask_proto[i]
-            # [pos_nums, 32]
-            cur_pos_mask_coef = pred_masks[i][pos_idx]
+        # [batch, num_priors] => [batch, num_priors, 1] => [batch, num_priors, num_classes]
+        # pos_idx = pos.unsqueeze(2).expand_as(conf_data)
+        # pos_idx = np.broadcast_to(np.expand_dims(pos, axis=-1), conf_data.shape)
+        # neg_idx = neg.unsqueeze(2).expand_as(conf_data)
+        # neg_idx = np.broadcast_to(np.expand_dims(neg, axis=-1), conf_data.shape)
 
-            if cur_pos_mask_coef.shape[0] > self.masks_to_train:
-                select = np.random.permutation(cur_pos_mask_coef.shape[0])[:self.masks_to_train]
-                cur_pos_mask_coef = cur_pos_mask_coef[select]
-                pos_idx = pos_idx[select]
-                cur_pos_gt_box = cur_pos_gt_box[select]
+        # conf_p = conf_data[(pos_idx + neg_idx).gt(0)].view(-1, self.num_classes)
+        conf_p = np.reshape(conf_data[(pos + neg) > 0], (-1, self.num_classes))
+        # targets_weighted = conf_t[(pos + neg).gt(0)]
+        targets_weighted = conf_t[(pos + neg) > 0]
+        loss_c = tf.keras.losses.SparseCategoricalCrossentropy()(targets_weighted, conf_p)
+        # loss_c = F.cross_entropy(conf_p, targets_weighted, reduction='none')
+        # loss_c = loss_c.sum()
 
-            # [n, 1/4, 1/4]
-            cur_pos_gt_masks_resize = cur_gt_masks_resize[pos_idx]
-            # [n]
-            cur_pos_gt_lables = gt_labels[i][pos_idx]
+        return self.conf_alpha * loss_c
+
+    def semantic_segmentation_loss(self, segment_data, mask_t, class_t):
+        # Note num_classes here is without the background class so cfg.num_classes-1
+        batch_size, mask_h, mask_w, num_classes = segment_data.shape()
+        loss_s = 0
+
+        for idx in range(batch_size):
+            cur_segment = segment_data[idx]
+            cur_class_t = class_t[idx]
+
+            # downsampled_masks = F.interpolate(mask_t[idx].unsqueeze(0), (mask_h, mask_w),
+            #                                   mode=interpolation_mode, align_corners=False).squeeze(0)
+            # downsampled_masks = downsampled_masks.gt(0.5).float()
+            downsampled_masks = tf.image.resize(mask_t[idx], size=(mask_h, mask_w),
+                                                method=tf.image.ResizeMethod.BILINEAR)
+            downsampled_masks = np.array(downsampled_masks > 0.5, dtype=np.float32)
+
+            # Construct Semantic Segmentation
+            segment_t = np.zeros_like(cur_segment)
+            for obj_idx in range(downsampled_masks.size(0)):
+                segment_t[cur_class_t[obj_idx]] = np.max(segment_t[cur_class_t[obj_idx]], downsampled_masks[obj_idx])
+
+            # loss_s += F.binary_cross_entropy_with_logits(cur_segment, segment_t, reduction='sum')
+            loss_s = tf.keras.losses.BinaryCrossentropy(from_logits=True)(segment_t, cur_segment)
+
+        return loss_s / mask_h / mask_w * self.semantic_segmentation_alpha
 
 
     def lincomb_mask_loss(self, pos, idx_t, mask_data, proto_data, masks, gt_box_t):
@@ -90,7 +136,8 @@ class MultiBoxLoss:
         loss_m = 0
         for idx in range(mask_data.size(0)):
             # [im_h, im_w, num_objs] => [1/4, 1/4, num_objs]
-            downsampled_masks = tf.image.resize(masks[idx], size=(mask_h, mask_w), method=tf.image.ResizeMethod.BILINEAR)
+            downsampled_masks = tf.image.resize(masks[idx], size=(mask_h, mask_w),
+                                                method=tf.image.ResizeMethod.BILINEAR)
             downsampled_masks = np.array(downsampled_masks > 0.5, dtype=np.float32)
             # downsampled_masks = F.interpolate(masks[idx].unsqueeze(0), (mask_h, mask_w),
             #                                   mode=interpolation_mode, align_corners=False).squeeze(0)
@@ -130,12 +177,14 @@ class MultiBoxLoss:
             pred_masks = proto_masks @ proto_coef.transpose()
             pred_masks = tf.sigmoid(pred_masks)
 
-            pre_loss = tf.keras.losses.BinaryCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(mask_t, np.clip(pred_masks,0,1))
+            pre_loss = tf.keras.losses.BinaryCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(mask_t,
+                                                                                                    np.clip(pred_masks,
+                                                                                                            0, 1))
             # pre_loss = F.binary_cross_entropy(torch.clamp(pred_masks, 0, 1), mask_t, reduction='none')
 
-            pos_gt_csize = np.concatenate(((pos_gt_box_t[,:2] + pos_gt_box_t[,2:])/2.,
-                                           pos_gt_box_t[,2:] - pos_gt_box_t[,:2]), axis=1)
-            gt_box_width  = pos_gt_csize[:, 2] * mask_w
+            pos_gt_csize = np.concatenate(((pos_gt_box_t[, :2] + pos_gt_box_t[, 2:]) / 2.,
+                                           pos_gt_box_t[, 2:] - pos_gt_box_t[, :2]), axis=1)
+            gt_box_width = pos_gt_csize[:, 2] * mask_w
             gt_box_height = pos_gt_csize[:, 3] * mask_h
             pre_loss = np.sum(pre_loss) / gt_box_width / gt_box_height
 
@@ -197,5 +246,3 @@ class MultiBoxLoss:
         # 计算所有非背景边框损失
         pos = conf_all > 0
         box_loss = self.smooth_l1_loss(pred_box[pos], loc_all[pos])
-
-
