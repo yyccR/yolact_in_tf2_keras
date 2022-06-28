@@ -2,9 +2,10 @@
 import numpy as np
 import tensorflow as tf
 
-def iou(box_a, box_b,eps=1e-7):
+
+def iou(box_a, box_b, eps=1e-7):
     """
-    :param box_a: [n, 4(x1,y1,x2,y2)] or [batch, n, 4(x1,y1,x2,y2)]
+    :param box_a: [n, 4(x1,y1,x2,y2)]
     :param box_b: [m, 4(x1,y1,x2,y2)]
     :return: [n,m] or [batch, n, m]
     """

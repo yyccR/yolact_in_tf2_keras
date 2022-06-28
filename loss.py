@@ -31,16 +31,16 @@ class MultiBoxLoss:
         loss = np.sum(loss)
         return loss
 
-    def ohem_conf_loss(self, conf_data, conf_t, pos, num):
+    def ohem_conf_loss(self, conf_data, conf_t, pos, batch_size):
         """ 计算分类损失
         :param conf_data: [batch, num_priors, num_classes]
         :param conf_t: [batch, num_objs]
-        :param pos:
-        :param num:
+        :param pos: [batch, num_prioris]
+        :param batch_size:
         :return:
         """
         # Compute max conf across batch for hard negative mining
-        batch_conf = conf_data.view(-1, self.num_classes)
+        batch_conf = np.reshape(conf_data, [-1, self.num_classes])
         # conf_max = np.max(batch_conf)
         # loss_c = np.log(np.sum(np.exp(batch_conf-conf_max), 1)) + conf_max - batch_conf[:, 0]
         # loss_c = log_sum_exp(batch_conf) - batch_conf[:, 0]
@@ -48,7 +48,7 @@ class MultiBoxLoss:
         loss_c = np.max(batch_conf[:, 1:], axis=1)
 
         # Hard Negative Mining
-        loss_c = loss_c.view(num, -1)
+        loss_c = np.reshape(loss_c, [batch_size, -1])
         # 过滤掉正样本
         loss_c[pos] = 0
         # 过滤掉容易分的负样本
@@ -116,7 +116,7 @@ class MultiBoxLoss:
             # loss_s += F.binary_cross_entropy_with_logits(cur_segment, segment_t, reduction='sum')
             loss_s = tf.keras.losses.BinaryCrossentropy(from_logits=True)(segment_t, cur_segment)
 
-        return loss_s / mask_h / mask_w * self.semantic_segmentation_alpha
+        return self.semantic_segmentation_alpha * loss_s / mask_h / mask_w
 
 
     def lincomb_mask_loss(self, pos, idx_t, mask_data, proto_data, masks, gt_box_t):
@@ -208,13 +208,13 @@ class MultiBoxLoss:
         """
         :param inputs: [box, cls, mask, mask_proto, semantic_seg_conv]
         :param gt_boxes: [batch, n, gt_boxes]
-        :param gt_labels:
+        :param gt_labels: [batch, n]
         :param gt_masks:
         :param args:
         :param kwargs:
         :return:
         """
-        # pred_box: [batch,-1,4]
+        # pred_box: [batch,-1,4(cx,cy,cw,ch)]
         # pred_cls: [batch, -1, cls_nums]
         # pred_mask: [batch,-1,mask_proto_channels]
         # pred_mask_proto: [batch, 1/4, 1/4, 32]
@@ -243,6 +243,23 @@ class MultiBoxLoss:
         prior_gt_boxes_all = np.array(batch_prior_gt_boxes, dtype=np.int32)
         batch_best_truth_idx = np.array(batch_best_truth_idx, dtype=np.int32)
 
-        # 计算所有非背景边框损失
+        # 所有非背景边框损失
         pos = conf_all > 0
         box_loss = self.smooth_l1_loss(pred_box[pos], loc_all[pos])
+        box_loss /= self.batch_size
+
+        # mask损失
+        mask_loss = self.lincomb_mask_loss(pos, batch_best_truth_idx, pred_mask, pred_mask_proto, gt_masks, prior_gt_boxes_all)
+        mask_loss /= self.batch_size
+
+        # 类别损失
+        cls_loss = self.ohem_conf_loss(pred_cls, conf_all, pos, self.batch_size)
+        cls_loss /= self.batch_size
+
+        # 语义分割损失
+        sem_seg_loss = self.semantic_segmentation_loss(pred_semantic_seg, gt_masks, gt_labels)
+        sem_seg_loss /= self.batch_size
+
+        total_loss = (box_loss + mask_loss + cls_loss + sem_seg_loss)
+
+        return box_loss, mask_loss, cls_loss, sem_seg_loss, total_loss
