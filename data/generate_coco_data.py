@@ -20,6 +20,7 @@ class CoCoDataGenrator:
                  img_shape=(640, 640, 3),
                  batch_size=1,
                  max_instances=50,
+                 min_box_area=80,
                  using_argument=False,
                  include_crowd=False,
                  include_mask=False,
@@ -38,6 +39,8 @@ class CoCoDataGenrator:
         self.batch_size = batch_size
         # 此参数为保证不同size的box,mask能padding到一个batch里
         self.max_instances = max_instances
+        # 最小目标边框面积
+        self.min_box_area = min_box_area
         # 是否使用数据增强
         self.using_argument = using_argument
         # 是否输出包含crowd类型数据
@@ -274,20 +277,21 @@ class CoCoDataGenrator:
             ymin = int(ymin)
             xmax = int(xmin + w)
             ymax = int(ymin + h)
-            bboxes.append([xmin, ymin, xmax, ymax])
-            # 类别ID
-            label = ann['category_id']
-            labels.append(label)
-            # 实例分割
-            if self.include_mask:
-                # [instances, h, w]
-                mask = self.coco.annToMask(ann)
-                masks.append(mask)
-            if self.include_keypoint and ann.get('keypoints'):
-                keypoint = ann['keypoints']
-                # 处理成[x,y,v] 其中v=0表示没有此点,v=1表示被挡不可见,v=2表示可见
-                keypoint = np.reshape(keypoint, [-1, 3])
-                keypoints.append(keypoint)
+            if int(w*h) > self.min_box_area:
+                bboxes.append([xmin, ymin, xmax, ymax])
+                # 类别ID
+                label = ann['category_id']
+                labels.append(label)
+                # 实例分割
+                if self.include_mask:
+                    # [instances, h, w]
+                    mask = self.coco.annToMask(ann)
+                    masks.append(mask)
+                if self.include_keypoint and ann.get('keypoints'):
+                    keypoint = ann['keypoints']
+                    # 处理成[x,y,v] 其中v=0表示没有此点,v=1表示被挡不可见,v=2表示可见
+                    keypoint = np.reshape(keypoint, [-1, 3])
+                    keypoints.append(keypoint)
         outputs = {
             "labels": np.array(labels),
             "bboxes": np.array(bboxes),
@@ -324,7 +328,7 @@ class CoCoDataGenrator:
             img = self._load_image(image_id)
             # {"labels":, "bboxes":, "masks":, "keypoints":}
             annotations = self._load_annotations(image_id)
-            if not img.shape[0]:
+            if not img.shape[0] and len(annotations['labels']) == 0:
                 return outputs
             labels = annotations['labels']
             bboxes = annotations['bboxes']

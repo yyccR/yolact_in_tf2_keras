@@ -1,7 +1,8 @@
 
-from itertools import product
+import os
 import math
 import numpy as np
+from itertools import product
 import tensorflow as tf
 from yolact_backbone import ResnetBackbone
 from box_utils import decode, nms
@@ -26,6 +27,7 @@ class HeadLayer(tf.keras.layers.Layer):
         box = tf.keras.layers.Reshape([-1, 4])(box)
         cls = self.conv_cls(x)
         cls = tf.keras.layers.Reshape([-1, self.num_classes])(cls)
+        cls = tf.keras.layers.Softmax()(cls)
         mask = self.conv_mask(x)
         mask = tf.keras.activations.tanh(mask)
         mask = tf.keras.layers.Reshape([-1, self.mask_proto_channels])(mask)
@@ -37,6 +39,7 @@ class Yolact:
                  input_shape=[640, 640, 3],
                  num_classes=90,
                  is_training=True,
+                 model_path=None,
                  mask_proto_channels=32,
                  aspect_ratios=[1, 0.5, 2],
                  scales = [24, 48, 96, 192, 384],
@@ -46,6 +49,7 @@ class Yolact:
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.is_training = is_training
+        self.model_path = model_path
         self.mask_proto_channels = mask_proto_channels
         self.aspect_ratios = aspect_ratios
         self.scales = scales
@@ -57,6 +61,12 @@ class Yolact:
         self.make_priors()
         self.backbone = ResnetBackbone(input_shape=self.input_shape).build_graph()
         self.HeadLayer = HeadLayer(aspect_ratios, num_classes, mask_proto_channels)
+        self.model = self.build_graph()
+        print("build yolact graph.")
+        if not self.is_training:
+            assert os.path.isfile(self.model_path), "Can't find the model weight file!"
+            self.model.load_weights(self.model_path)
+            print("loading model weight from {}".format(model_path))
 
     def make_priors(self):
         """预设坐标xywh, 类似于yolo"""
@@ -175,7 +185,6 @@ class Yolact:
         head_cls_pred = tf.keras.layers.Concatenate(axis=-2)([
             head3[1], head4[1], head5[1], head6[1], head7[1]
         ])
-        head_cls_pred = tf.keras.layers.Softmax()(head_cls_pred)
         head_mask_pred = tf.keras.layers.Concatenate(axis=-2)([
             head3[2], head4[2], head5[2], head6[2], head7[2]
         ])
@@ -198,18 +207,19 @@ class Yolact:
         heads = self.head(fpns)
         if self.is_training:
             # semantic segments shape:[batch, 1/8, 1/8, classes]
-            semantic_seg = tf.keras.layers.Conv2D(self.num_classes, kernel_size=1)(fpns[0])
+            # semantic_seg = tf.keras.layers.Conv2D(self.num_classes, kernel_size=1)(fpns[0])
             # box, cls, mask, semantic
-            model = tf.keras.Model(inputs=inputs, outputs=[*heads, mask_proto, semantic_seg])
+            # model = tf.keras.Model(inputs=inputs, outputs=[*heads, mask_proto, semantic_seg])
+            model = tf.keras.Model(inputs=inputs, outputs=[*heads, mask_proto])
         else:
             # box_pred:[batch,-1,4], feature_prior_data:[1, -1, 4]
             decode_boxes = decode(heads[0], self.feature_prior_data)
-            softmax_cls = tf.keras.layers.Softmax()(heads[1])
-            model = tf.keras.Model(inputs=inputs, outputs=[decode_boxes, softmax_cls, heads[2]])
+            # softmax_cls = tf.keras.layers.Softmax()(heads[1])
+            # model = tf.keras.Model(inputs=inputs, outputs=[decode_boxes, softmax_cls, heads[2]])
+            model = tf.keras.Model(inputs=inputs, outputs=[decode_boxes, heads[1], heads[2], mask_proto])
         return model
 
 
 if __name__ == "__main__":
     yolact = Yolact(is_training=True)
-    model = yolact.build_graph()
-    model.summary(line_length=200)
+    yolact.model.summary(line_length=200)
