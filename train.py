@@ -22,7 +22,7 @@ def main():
     image_shape = (384, 384, 3)
     assert (image_shape[0] % 8 == 0) & (image_shape[1] % 8 == 0), "image shape 必须为8的整数倍"
     num_class = 91
-    batch_size = 15
+    batch_size = 2
     # -1表示全部数据参与训练
     train_img_nums = -1
     train_coco_json = './data/instances_val2017.json'
@@ -84,7 +84,7 @@ def main():
         nms_thres=0.5
     )
     yolact.model.summary(line_length=200)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
 
     loss_fn = MultiBoxLoss(
         batch_size=batch_size,
@@ -101,12 +101,12 @@ def main():
     )
 
     pre_mAP = 0.
-    # data = coco_data.next_batch()
+    data = coco_data.next_batch()
     for epoch in range(epochs):
         train_progress_bar = tqdm.tqdm(range(coco_data.total_batch_size), desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
         for batch in train_progress_bar:
             with tf.GradientTape() as tape:
-                data = coco_data.next_batch()
+                # data = coco_data.next_batch()
                 valid_nums = data['valid_nums']
                 gt_imgs = np.array(data['imgs'] / 255., dtype=np.float32)
                 gt_boxes = [data['bboxes'][i][:valid_num] / image_shape[0] for i,valid_num in enumerate(valid_nums)]
@@ -124,7 +124,6 @@ def main():
 
                 yolact_preds = yolact.model(gt_imgs, training=True)
                 box_loss, mask_loss, cls_loss, total_loss = loss_fn(yolact_preds, gt_boxes, gt_labels, gt_masks)
-                print(box_loss, mask_loss, cls_loss, total_loss)
 
                 train_progress_bar.set_postfix(ordered_dict={"loss":'{:.5f}'.format(total_loss)})
 
@@ -158,9 +157,9 @@ def main():
                     gt_img = draw_bounding_box(gt_img, class_name, cls, int(xmin), int(ymin), int(xmax), int(ymax))
                     gt_img = draw_instance(gt_img, gt_mask, alpha=0.3)
 
-                # pred, 同样只拿第一个batch的pred
+                # pred, 同样只拿随机一个batch的pred
                 pred_img = gt_imgs[random_one].copy() * 255
-                out_boxes = decode(yolact_preds[0], yolact.feature_prior_data).numpy()
+                out_boxes = decode(yolact_preds[0], yolact.feature_prior_data)
                 out_boxes, out_classes, out_scores, out_masks = detect(
                     pred_boxes=out_boxes,
                     pred_classes=yolact_preds[1],
@@ -173,16 +172,18 @@ def main():
                 )
                 if len(out_classes) == batch_size:
                     random_boxes = out_boxes[random_one]
-                    for box_obj_cls in random_boxes:
-                        if box_obj_cls[4] > 0.5:
-                            label = int(box_obj_cls[5])
+                    random_cls_scores = out_scores[random_one]
+                    random_labels = out_classes[random_one]
+                    for i, box_obj_cls in enumerate(random_boxes):
+                        if random_cls_scores[i] > 0.5:
+                            label = int(random_labels[i])
                             if coco_data.coco.cats.get(label):
                                 class_name = coco_data.coco.cats[label]['name']
                                 # class_name = classes[label]
                                 xmin, ymin, xmax, ymax = box_obj_cls[:4]
-                                pred_img = draw_bounding_box(pred_img, class_name, box_obj_cls[4], int(xmin), int(ymin),
+                                pred_img = draw_bounding_box(pred_img, class_name, random_cls_scores[i], int(xmin), int(ymin),
                                                              int(xmax), int(ymax))
-                                pred_img = draw_instance(pred_img, out_masks[random_one], alpha=0.3)
+                                pred_img = draw_instance(pred_img, out_masks[random_one][:,:,i], alpha=0.3)
 
                 concat_imgs = tf.concat([gt_img[:, :, ::-1], pred_img[:, :, ::-1]], axis=1)
                 summ_imgs = tf.expand_dims(concat_imgs, 0)

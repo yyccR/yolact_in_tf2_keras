@@ -133,7 +133,10 @@ class CoCoDataGenrator:
                     #     valid_nums.append(len(data['labels']))
 
                     if self.include_mask:
-                        batch_masks.append(data['masks'])
+                        if data['masks'].shape == (self.img_shape[0], self.img_shape[1], self.max_instances):
+                            batch_masks.append(data['masks'])
+                        else:
+                            return self.next_batch()
 
                     if self.include_keypoint:
                         batch_keypoints.append(data['keypoints'])

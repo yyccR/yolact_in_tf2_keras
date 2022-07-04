@@ -67,7 +67,7 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
 
     :param decoded_boxes: [batch, num_priors, 4(x1,y1,x2,y2)]
     :param masks: [batch, num_priors, mask_dim=32]
-    :param scores: [batch, num_priors,num_classes+1]
+    :param scores: [batch, num_priors, num_classes+1]
     :param image_size:
     :param iou_threshold:
     :param conf_thresh:
@@ -75,6 +75,10 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
     :return:
     """
     batch_size = decoded_boxes.shape[0]
+    num_classes = scores.shape[2]
+    decoded_boxes = decoded_boxes.numpy()
+    masks = masks.numpy()
+    scores = scores.numpy()
 
     batch_boxes = []
     batch_masks = []
@@ -83,8 +87,8 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
     for i in range(batch_size):
         # cur_socres = scores[i, :, 1:]
         cur_socres = scores[i]
-        cur_socres = np.max(cur_socres, axis=-1)
-        keep = cur_socres > conf_thresh
+        max_socres = np.max(cur_socres, axis=-1)
+        keep = max_socres > conf_thresh
 
         cur_boxes = decoded_boxes[i][keep]
         cur_boxes = cur_boxes * image_size
@@ -95,7 +99,6 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
         cur_nms_masks = []
         cur_nms_scores = []
         cur_nms_classes = []
-        num_classes = cur_socres.shape[1]
         for _cls in range(num_classes):
             cls_scores = cur_socres[:, _cls]
             conf_mask = cls_scores > conf_thresh
@@ -106,7 +109,7 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
             cls_mask = cur_masks[conf_mask]
             # idx = idx[conf_mask]
 
-            if cls_scores.size(0) == 0:
+            if cls_scores.shape[0] == 0:
                 continue
 
             # preds = np.concatenate([cls_boxes, cls_scores[:, None]], axis=1)
@@ -120,8 +123,8 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
 
             cur_nms_boxes.append(cls_boxes[nms_keep])
             cur_nms_scores.append(cls_scores[nms_keep])
-            cur_nms_classes.append([keep] * 0 + _cls)
-            cur_nms_masks.append(cls_mask[keep])
+            cur_nms_classes.append(nms_keep * 0 + _cls)
+            cur_nms_masks.append(cls_mask[nms_keep])
             # idx_lst.append(idx[keep])
             # cls_lst.append(keep * 0 + _cls)
             # scr_lst.append(cls_scores[keep])
@@ -284,21 +287,21 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
         masks = crop(masks, nms_boxes[i])
         # mask处理到输入图片的大小
         up_sample_masks = tf.image.resize(masks, size=(image_size, image_size), method=tf.image.ResizeMethod.BILINEAR)
-        up_sample_masks = up_sample_masks > 0.5
+        up_sample_masks = np.array(up_sample_masks > 0.5,dtype=np.int32)
 
         # 目标边框处理到输入图片大小
         boxes_x1, boxes_y1 = sanitize_coordinates(nms_boxes[i][:, 0], nms_boxes[i][:, 2], image_size)
         boxes_x2, boxes_y2 = sanitize_coordinates(nms_boxes[i][:, 1], nms_boxes[i][:, 3], image_size)
-        nms_boxes_x1y1x2y2 = np.concatenate([boxes_x1,boxes_y1,boxes_x2,boxes_y2],axis=-1)
+        nms_boxes_x1y1x2y2 = np.concatenate(
+            [boxes_x1[:,None],boxes_y1[:,None],boxes_x2[:,None],boxes_y2[:,None]],axis=-1)
 
         # 顶部k个
         top_k_id = np.argsort(-nms_scores[i])[:top_k]
-        if len(top_k_id) == 1:
-            top_k_id = [top_k_id]
-
-        out_boxes.append(nms_boxes_x1y1x2y2[top_k_id,:])
-        out_classes.append(nms_classes[top_k_id])
-        out_scores.append(nms_scores[top_k_id])
+        # if len(top_k_id) == 1:
+        #     top_k_id = np.array([top_k_id])
+        out_boxes.append(nms_boxes_x1y1x2y2[top_k_id])
+        out_classes.append(nms_classes[i][top_k_id])
+        out_scores.append(nms_scores[i][top_k_id])
         out_masks.append(up_sample_masks[:,:,top_k_id])
 
     return out_boxes, out_classes, out_scores, out_masks

@@ -28,13 +28,13 @@ class MultiBoxLoss:
         # less_than_one = tf.cast(tf.keras.backend.less(diff, 1.0), dtype=tf.float32)
         less_than_one = tf.cast(diff < 1.0, dtype=tf.float32)
         loss = (less_than_one * 0.5 * diff ** 2) + (1 - less_than_one) * (diff - 0.5)
-        loss = tf.reduce_sum(loss)
+        loss = tf.reduce_mean(loss)
         return loss
 
-    def ohem_conf_loss(self, conf_data, conf_t, pos, batch_size):
+    def ohem_conf_loss(self, pred_cls, true_cls, pos, batch_size):
         """ 计算分类损失
-        :param conf_data: [batch, num_priors, num_classes]
-        :param conf_t: [batch, num_priors]
+        :param pred_cls: [batch, num_priors, num_classes]
+        :param true_cls: [batch, num_priors]
         :param pos: [batch, num_priors]
         :param batch_size:
         :return:
@@ -47,7 +47,7 @@ class MultiBoxLoss:
         # batch_conf = tf.math.softmax(batch_conf, dim=1)
         # loss_c = np.max(batch_conf[:, 1:], axis=1)
         # loss_c = np.max(batch_conf, axis=1)
-        loss_c = tf.reduce_max(conf_data, axis=-1)
+        loss_c = tf.reduce_max(pred_cls, axis=-1)
 
         # Hard Negative Mining
         # loss_c = np.reshape(loss_c, [batch_size, -1])
@@ -57,7 +57,7 @@ class MultiBoxLoss:
         loss_c = tf.tensor_scatter_nd_update(loss_c, pos_indices, pos_samples)
         # loss_c[pos] = 0
         # 过滤掉容易分的负样本
-        easy_neg_indices = tf.where(conf_t < 0)
+        easy_neg_indices = tf.where(true_cls < 0)
         easy_neg_samples = tf.zeros((easy_neg_indices.get_shape()[0]))
         loss_c = tf.tensor_scatter_nd_update(loss_c, easy_neg_indices, easy_neg_samples)
         # loss_c[conf_t < 0] = 0
@@ -74,12 +74,12 @@ class MultiBoxLoss:
         # _, idx_rank = loss_idx.sort(1)
         # num_pos = pos.long().sum(1, keepdim=True)
         # num_pos = np.sum(pos, axis=1)
-        num_pos = tf.reduce_sum(pos, axis=1)
+        num_pos = tf.reduce_sum(tf.cast(pos, dtype=tf.int32), axis=1)
 
         # num_neg = torch.clamp(self.ohem_negpos_ratio * num_pos, max=pos.size(1) - 1)
         # 计算负样本个数, 这里负样本为正样本3倍,并且不超过原样本总数
         # num_neg = np.minimum(self.ohem_negpos_ratio * num_pos, pos.shape[1] - 1)
-        num_neg = tf.minimum((self.ohem_negpos_ratio * num_pos, pos.shape[1] - 1))
+        num_neg = tf.minimum(self.ohem_negpos_ratio * num_pos, pos.shape[1] - 1)
         # 先对loss_c从大到小排序, 得到排序下标索引, 再对这个排序下标索引从小到大排序拿到索引
         # neg = idx_rank < num_neg.expand_as(idx_rank)
         neg = idx_rank < tf.broadcast_to(num_neg[:, None], idx_rank.get_shape())
@@ -87,9 +87,9 @@ class MultiBoxLoss:
         # neg = idx_rank < np.broadcast_to(num_neg[:, None], idx_rank.shape)
 
         # 去掉那些正样本和容易分的负样本 pos为conf_t>0的，还有conf_t=0和conf_t=-1的，-1的是容易分的负样本
-        neg = tf.tensor_scatter_nd_update(neg, pos_indices, pos_samples)
+        neg = tf.tensor_scatter_nd_update(neg, pos_indices, tf.cast(pos_samples, dtype=tf.int32))
         # neg[pos] = 0
-        neg = tf.tensor_scatter_nd_update(neg, easy_neg_indices, easy_neg_samples)
+        neg = tf.tensor_scatter_nd_update(neg, easy_neg_indices, tf.cast(easy_neg_samples,dtype=tf.int32))
         # neg[conf_t < 0] = 0
 
         # [batch, num_priors] => [batch, num_priors, 1] => [batch, num_priors, num_classes]
@@ -99,11 +99,12 @@ class MultiBoxLoss:
         # neg_idx = np.broadcast_to(np.expand_dims(neg, axis=-1), conf_data.shape)
 
         # conf_p = conf_data[(pos_idx + neg_idx).gt(0)].view(-1, self.num_classes)
-        pos_neg_indices = tf.where((pos+neg) > 0)
+        pos_neg_indices = (pos+neg) > 0
         # conf_p = tf.reshape(conf_data[pos_neg_indices], (-1, self.num_classes))
-        conf_p = np.reshape(conf_data[pos_neg_indices], (-1, self.num_classes))
+        # print(pred_cls.shape,true_cls.shape, pos_neg_indices.shape, pos.shape)
+        conf_p = tf.gather_nd(pred_cls,tf.where(pos_neg_indices))
         # targets_weighted = conf_t[(pos + neg).gt(0)]
-        conf_t = conf_t[pos_neg_indices]
+        conf_t = true_cls[pos_neg_indices.numpy()]
         loss_c = tf.keras.losses.SparseCategoricalCrossentropy()(conf_t, conf_p)
         # loss_c = F.cross_entropy(conf_p, targets_weighted, reduction='none')
         # loss_c = loss_c.sum()
@@ -175,9 +176,11 @@ class MultiBoxLoss:
             # If we have over the allowed number of masks, select a random sample
             old_num_pos = proto_coef.shape[0]
             if old_num_pos > self.masks_to_train:
-                select = tf.random.shuffle(tf.range(proto_coef.shape[0]))[:self.masks_to_train]
+                select = tf.random.shuffle(tf.range(proto_coef.shape[0]))[:self.masks_to_train, ]
                 # select = np.random.permutation(proto_coef.shape[0])[:self.masks_to_train]
-                proto_coef = proto_coef[select]
+                proto_coef = tf.gather(proto_coef,select)
+                # proto_coef = proto_coef[select]
+                # pos_idx_t = tf.gather(pos_idx_t,select)
                 pos_idx_t = pos_idx_t[select]
 
                 # perm = torch.randpserm(proto_coef.size(0))
@@ -185,11 +188,12 @@ class MultiBoxLoss:
                 # proto_coef = proto_coef[select, :]
                 # pos_idx_t  = pos_idx_t[select]
 
-                pos_gt_box_t = pos_gt_box_t[select]
+                pos_gt_box_t = tf.gather(pos_gt_box_t,select)
+                # pos_gt_box_t = pos_gt_box_t[select]
 
             # num_pos = proto_coef.shape[0]
             # [num_selects, mask_h, mask_w] => [mask_h, mask_w, num_selects]
-            mask_t = np.transpose(downsampled_masks[:, :, pos_idx_t],[1,2,0])
+            mask_t = downsampled_masks[:, :, pos_idx_t]
 
             # Size: [h, w, 32] x [pos_nums, 32].T = [mask_h, mask_w, num_pos]
             pred_masks = proto_masks @ tf.transpose(proto_coef, [1, 0])
