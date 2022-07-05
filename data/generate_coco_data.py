@@ -453,11 +453,12 @@ if __name__ == "__main__":
     coco = CoCoDataGenrator(
         coco_annotation_file=file,
         train_img_nums=30,
+        max_instances=6,
         include_mask=True,
         include_keypoint=False,
         need_down_image=False,
-        batch_size=10,
-        using_argument=True
+        batch_size=1,
+        using_argument=False
     )
 
     data = coco.next_batch()
@@ -467,6 +468,7 @@ if __name__ == "__main__":
     gt_classes = data['labels']
     gt_masks = data['masks']
     valid_nums = data['valid_nums']
+    print(gt_boxes)
 
     img = gt_imgs if len(np.shape(gt_imgs)) == 3 else gt_imgs[-1]
     valid_num = [valid_nums] if type(valid_nums) == int else valid_nums
@@ -478,7 +480,7 @@ if __name__ == "__main__":
         label_name = coco.coco.cats[label]['name']
         x1, y1, x2, y2 = gt_boxes[-1][i]
         mask = gt_masks[-1][:, :, i]
-        # img = draw_instance(img, mask)
+        img = draw_instance(img, mask)
         img = draw_bounding_box(img, label_name, label, x1, y1, x2, y2)
     cv2.imshow("", img)
     cv2.waitKey(0)
