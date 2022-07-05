@@ -11,15 +11,16 @@ def iou(box_a, box_b, eps=1e-7):
 
     box_a = box_a[..., None, :]
     # [n, m]
-    inter = (np.minimum(box_a[..., 3], box_b[..., 3]) - np.maximum(box_a[..., 1], box_b[..., 1])) * \
-            (np.minimum(box_a[..., 2], box_b[..., 2]) - np.maximum(box_a[..., 0], box_b[..., 0]))
+    diff_y = np.clip(np.minimum(box_a[..., 3], box_b[..., 3]) - np.maximum(box_a[..., 1], box_b[..., 1]), 0, 1)
+    diff_x = np.clip(np.minimum(box_a[..., 2], box_b[..., 2]) - np.maximum(box_a[..., 0], box_b[..., 0]), 0, 1)
+    inter = diff_x * diff_y
 
     area_a = (box_a[..., 2] - box_a[..., 0]) * (box_a[..., 3] - box_a[..., 1])
     area_b = (box_b[..., 2] - box_b[..., 0]) * (box_b[..., 3] - box_b[..., 1])
     # [n, m]
-    union = area_a + area_b
-
+    union = area_a + area_b - inter
     iou = inter / (union + eps)
+
     return iou
 
 
@@ -166,7 +167,7 @@ def match(priors, ground_true_boxes, ground_true_labels, pos_thresh=0.5, neg_thr
     best_truth_idx = np.argmax(overlap, axis=0)
 
     for _ in range(overlap.shape[0]):
-        # 找到每个真实边框与prior的最大overlap, 及其id
+        # 找到每个真实边框与所有prior的最大overlap, 及其id
         best_prior_overlap = np.max(overlap, axis=1)
         best_prior_idx = np.argmax(overlap, axis=1)
 
@@ -195,7 +196,7 @@ def match(priors, ground_true_boxes, ground_true_labels, pos_thresh=0.5, neg_thr
 
     # 计算真实边框与先验框之间的平移缩放量
     loc = encode(matches, priors)
-    return loc, conf, best_truth_idx
+    return loc, matches, conf, best_truth_idx
 
 
 def sanitize_coordinates(_x1, _x2, img_size, padding=0):
@@ -287,13 +288,13 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
         masks = crop(masks, nms_boxes[i])
         # mask处理到输入图片的大小
         up_sample_masks = tf.image.resize(masks, size=(image_size, image_size), method=tf.image.ResizeMethod.BILINEAR)
-        up_sample_masks = np.array(up_sample_masks > 0.5,dtype=np.int32)
+        up_sample_masks = np.array(up_sample_masks > 0.5, dtype=np.int32)
 
         # 目标边框处理到输入图片大小
         boxes_x1, boxes_y1 = sanitize_coordinates(nms_boxes[i][:, 0], nms_boxes[i][:, 2], image_size)
         boxes_x2, boxes_y2 = sanitize_coordinates(nms_boxes[i][:, 1], nms_boxes[i][:, 3], image_size)
         nms_boxes_x1y1x2y2 = np.concatenate(
-            [boxes_x1[:,None],boxes_y1[:,None],boxes_x2[:,None],boxes_y2[:,None]],axis=-1)
+            [boxes_x1[:, None], boxes_y1[:, None], boxes_x2[:, None], boxes_y2[:, None]], axis=-1)
 
         # 顶部k个
         top_k_id = np.argsort(-nms_scores[i])[:top_k]
@@ -302,6 +303,6 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
         out_boxes.append(nms_boxes_x1y1x2y2[top_k_id])
         out_classes.append(nms_classes[i][top_k_id])
         out_scores.append(nms_scores[i][top_k_id])
-        out_masks.append(up_sample_masks[:,:,top_k_id])
+        out_masks.append(up_sample_masks[:, :, top_k_id])
 
     return out_boxes, out_classes, out_scores, out_masks

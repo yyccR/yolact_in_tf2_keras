@@ -22,7 +22,7 @@ def main():
     image_shape = (384, 384, 3)
     assert (image_shape[0] % 8 == 0) & (image_shape[1] % 8 == 0), "image shape 必须为8的整数倍"
     num_class = 91
-    batch_size = 2
+    batch_size = 1
     # -1表示全部数据参与训练
     train_img_nums = -1
     train_coco_json = './data/instances_val2017.json'
@@ -84,7 +84,7 @@ def main():
         nms_thres=0.5
     )
     yolact.model.summary(line_length=200)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
 
     loss_fn = MultiBoxLoss(
         batch_size=batch_size,

@@ -7,8 +7,8 @@ from box_utils import iou, decode, match, crop
 class MultiBoxLoss:
     def __init__(self,
                  batch_size, num_classes, priors, conf_alpha=1, bbox_alpha=1.5,
-                 semantic_segmentation_alpha=1, mask_alpha=6.125, pos_thresh=0.5,
-                 neg_thresh=0.4, masks_to_train=100, ohem_negpos_ratio=3):
+                 semantic_segmentation_alpha=1, mask_alpha=6.125, pos_thresh=0.4,
+                 neg_thresh=0.3, masks_to_train=100, ohem_negpos_ratio=3):
         self.batch_size = batch_size
         self.num_classes = num_classes
         # [num_priors, 4]
@@ -24,11 +24,12 @@ class MultiBoxLoss:
 
     def smooth_l1_loss(self, loc_p, loc_t):
         """计算目标边框损失"""
+        # print(loc_p.shape, loc_t.shape)
         diff = tf.abs(loc_t - loc_p)
         # less_than_one = tf.cast(tf.keras.backend.less(diff, 1.0), dtype=tf.float32)
         less_than_one = tf.cast(diff < 1.0, dtype=tf.float32)
         loss = (less_than_one * 0.5 * diff ** 2) + (1 - less_than_one) * (diff - 0.5)
-        loss = tf.reduce_mean(loss)
+        loss = tf.reduce_sum(loss)
         return loss
 
     def ohem_conf_loss(self, pred_cls, true_cls, pos, batch_size):
@@ -240,9 +241,9 @@ class MultiBoxLoss:
         :param kwargs:
         :return:
         """
-        # pred_box: [batch,-1,4(cx,cy,cw,ch)]
-        # pred_cls: [batch, -1, cls_nums]
-        # pred_mask: [batch,-1,mask_proto_channels]
+        # pred_box: [batch, num_priors, 4(cx,cy,cw,ch)]
+        # pred_cls: [batch, num_priors, cls_nums]
+        # pred_mask: [batch, num_priors, mask_proto_channels]
         # pred_mask_proto: [batch, 1/4, 1/4, 32]
         # pred_semantic_seg: [batch, 1/8, 1/8, classes-1]
         pred_box, pred_cls, pred_mask, pred_mask_proto = inputs
@@ -257,11 +258,12 @@ class MultiBoxLoss:
         batch_best_truth_idx = []
         for i in range(self.batch_size):
             # 这里给每个prior找到对应的边框, overlap太小的不要, 类似于faster-rcnn/mask-rcnn里的anchors做法
-            # loc:[num_prioris, 4(cx,cy,cw,ch)]
-            # conf:[num_prioris]
-            # best_truth_idx:[num_prioris]
-            loc, conf, best_truth_idx = match(self.priors, gt_boxes[i], gt_labels[i], self.pos_thresh, self.neg_thresh)
-            prior_gt_boxes = gt_boxes[i][best_truth_idx]
+            # loc:[num_priors, 4(cx,cy,cw,ch)]
+            # conf:[num_priors]
+            # best_truth_idx:[num_priors]
+            loc, prior_gt_boxes, conf, best_truth_idx = match(
+                self.priors, gt_boxes[i], gt_labels[i], self.pos_thresh, self.neg_thresh)
+            # prior_gt_boxes = gt_boxes[i][best_truth_idx]
 
             batch_loc.append(loc)
             batch_conf.append(conf)
