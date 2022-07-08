@@ -21,10 +21,11 @@ def main():
     log_dir = './logs'
     image_shape = (384, 384, 3)
     assert (image_shape[0] % 8 == 0) & (image_shape[1] % 8 == 0), "image shape 必须为8的整数倍"
+    # 类别数
     num_class = 91
-    batch_size = 1
+    batch_size = 5
     # -1表示全部数据参与训练
-    train_img_nums = -1
+    train_img_nums = 5
     train_coco_json = './data/instances_val2017.json'
     val_coco_json = './data/instances_val2017.json'
 
@@ -90,23 +91,23 @@ def main():
         batch_size=batch_size,
         num_classes=num_class,
         priors=yolact.feature_prior_data,
-        conf_alpha=1,
-        bbox_alpha=1.5,
+        conf_alpha=3,
+        bbox_alpha=1,
         semantic_segmentation_alpha=1,
         mask_alpha=6.125,
         pos_thresh=0.5,
         neg_thresh=0.4,
         masks_to_train=100,
-        ohem_negpos_ratio=3
+        ohem_negpos_ratio=2
     )
 
     pre_mAP = 0.
-    data = coco_data.next_batch()
+    # data = coco_data.next_batch()
     for epoch in range(epochs):
         train_progress_bar = tqdm.tqdm(range(coco_data.total_batch_size), desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
         for batch in train_progress_bar:
             with tf.GradientTape() as tape:
-                # data = coco_data.next_batch()
+                data = coco_data.next_batch()
                 valid_nums = data['valid_nums']
                 gt_imgs = np.array(data['imgs'] / 255., dtype=np.float32)
                 gt_boxes = [data['bboxes'][i][:valid_num] / image_shape[0] for i,valid_num in enumerate(valid_nums)]
@@ -166,8 +167,8 @@ def main():
                     pred_masks=yolact_preds[2],
                     pred_proto=yolact_preds[3],
                     image_size=image_shape[0],
-                    iou_threshold=0.5,
-                    conf_thresh=0.25,
+                    iou_threshold=0.3,
+                    conf_thresh=0.4,
                     top_k=100
                 )
                 if len(out_classes) == batch_size:
@@ -175,7 +176,7 @@ def main():
                     random_cls_scores = out_scores[random_one]
                     random_labels = out_classes[random_one]
                     for i, box_obj_cls in enumerate(random_boxes):
-                        if random_cls_scores[i] > 0.5:
+                        if random_cls_scores[i] > 0.6:
                             label = int(random_labels[i])
                             if coco_data.coco.cats.get(label):
                                 class_name = coco_data.coco.cats[label]['name']

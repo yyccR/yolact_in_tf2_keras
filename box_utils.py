@@ -45,8 +45,8 @@ def encode(matched, priors):
 def decode(loc, priors):
     """ 将预测偏移缩放量映射到prior上, 处理成[x,y,w,h]
 
-    :param loc: shape [batch,num_priors,4]
-    :param priors: shape [num_priors, 4]
+    :param loc: shape [batch,num_priors,4(cx,cy,cw,ch)]
+    :param priors: shape [num_priors, 4(x,y,w,h)]
     :return: [batch,num_priors,4(x,y,x,y)]
     """
     variances = [0.1, 0.2]
@@ -76,7 +76,7 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
     :return:
     """
     batch_size = decoded_boxes.shape[0]
-    num_classes = scores.shape[2]
+    num_classes = scores.shape[2] - 1
     decoded_boxes = decoded_boxes.numpy()
     masks = masks.numpy()
     scores = scores.numpy()
@@ -86,8 +86,8 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
     batch_scores = []
     batch_classes = []
     for i in range(batch_size):
-        # cur_socres = scores[i, :, 1:]
-        cur_socres = scores[i]
+        cur_socres = scores[i, :, 1:]
+        # cur_socres = scores[i]
         max_socres = np.max(cur_socres, axis=-1)
         keep = max_socres > conf_thresh
 
@@ -133,6 +133,9 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
         # idx = torch.cat(idx_lst, dim=0)
         # classes = torch.cat(cls_lst, dim=0)
         # scores = torch.cat(scr_lst, dim=0)
+        if len(cur_nms_boxes) == 0:
+            return cur_nms_boxes, cur_nms_classes, cur_nms_scores, cur_nms_masks
+
         cur_nms_boxes = np.concatenate(cur_nms_boxes, axis=0)
         cur_nms_masks = np.concatenate(cur_nms_masks, axis=0)
         cur_nms_scores = np.concatenate(cur_nms_scores, axis=0)
@@ -146,7 +149,7 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
 
     # Undo the multiplication above
     # return boxes[idx] / cfg.max_size, masks[idx], classes, scores
-    return batch_boxes, batch_masks, batch_classes, batch_scores
+    return batch_boxes, batch_classes, batch_scores, batch_masks
 
 
 def match(priors, ground_true_boxes, ground_true_labels, pos_thresh=0.5, neg_thresh=0.4):
@@ -187,8 +190,8 @@ def match(priors, ground_true_boxes, ground_true_labels, pos_thresh=0.5, neg_thr
     # 这里最终每个prior都会找到一个对应的真实边框
     matches = ground_true_boxes[best_truth_idx]
     # 这里模型默认第一位预测的是背景, 所以所有标签顺延+1
-    # conf = ground_true_labels[best_truth_idx] + 1
-    conf = ground_true_labels[best_truth_idx]
+    conf = ground_true_labels[best_truth_idx] + 1
+    # conf = ground_true_labels[best_truth_idx]
 
     # (negative 样本)0.4 < (native 样本) < 0.5(positive 样本)
     conf[best_truth_overlap < pos_thresh] = -1
@@ -260,8 +263,8 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
              out_scores: [batch, n]
              out_masks: [batch, image_h, image_w, n]
     """
-    # 对每个batch的数据做非极大抑制, box处理到[0,image_size]
-    nms_boxes, nms_masks, nms_classes, nms_scores = nms(
+    # 对每个batch的数据做非极大抑制, box处理到[0,1]
+    nms_boxes, nms_classes, nms_scores, nms_masks = nms(
         decoded_boxes=pred_boxes,
         masks=pred_masks,
         scores=pred_classes,
@@ -273,13 +276,13 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
 
     # 没有数据返回空
     if not nms_classes or len(nms_classes[0]) <= 0:
-        return
+        return nms_boxes, nms_classes, nms_scores, nms_masks
 
     out_masks = []
     out_boxes = []
     out_classes = []
     out_scores = []
-    for i in range(len(nms_classes)):
+    for i in range(len(nms_masks)):
         # [num_detections, mask_dim] => [mask_dim, num_detections]
         cur_masks = np.transpose(nms_masks[i], [1, 0])
         # [h/4, w/4, mask_dim] @ [mask_dim, num_detections] => [h/4, w/4, num_detections]
@@ -289,10 +292,12 @@ def detect(pred_boxes, pred_classes, pred_masks, pred_proto, image_size=640, iou
         # mask处理到输入图片的大小
         up_sample_masks = tf.image.resize(masks, size=(image_size, image_size), method=tf.image.ResizeMethod.BILINEAR)
         up_sample_masks = np.array(up_sample_masks > 0.5, dtype=np.int32)
+        # 只保留每个目标边框里面的mask
+        # up_sample_masks = crop(up_sample_masks, nms_boxes[i])
 
         # 目标边框处理到输入图片大小
-        boxes_x1, boxes_y1 = sanitize_coordinates(nms_boxes[i][:, 0], nms_boxes[i][:, 2], image_size)
-        boxes_x2, boxes_y2 = sanitize_coordinates(nms_boxes[i][:, 1], nms_boxes[i][:, 3], image_size)
+        boxes_x1, boxes_x2 = sanitize_coordinates(nms_boxes[i][:, 0], nms_boxes[i][:, 2], image_size)
+        boxes_y1, boxes_y2 = sanitize_coordinates(nms_boxes[i][:, 1], nms_boxes[i][:, 3], image_size)
         nms_boxes_x1y1x2y2 = np.concatenate(
             [boxes_x1[:, None], boxes_y1[:, None], boxes_x2[:, None], boxes_y2[:, None]], axis=-1)
 

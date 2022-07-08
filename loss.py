@@ -1,4 +1,5 @@
 import cv2
+import math
 import numpy as np
 import tensorflow as tf
 from box_utils import iou, decode, match, crop
@@ -32,23 +33,78 @@ class MultiBoxLoss:
         loss = tf.reduce_sum(loss)
         return loss
 
-    def ohem_conf_loss(self, pred_cls, true_cls, pos, batch_size):
+    def bbox_iou(self, box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
+        """ 计算iou
+        :param box1:
+        :param box2:
+        :param x1y1x2y2:
+        :param GIoU:
+        :param DIoU:
+        :param CIoU:
+        :param eps:
+        :return:
+        """
+        # box2 = box2.T
+
+        # Get the coordinates of bounding boxes
+        if x1y1x2y2:  # x1, y1, x2, y2 = box1
+            b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+            b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+        else:  # transform from xywh to xyxy
+            b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
+            b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
+            b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
+            b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
+
+        # Intersection area
+        inter = (tf.minimum(b1_x2, b2_x2) - tf.maximum(b1_x1, b2_x1)) * \
+                (tf.minimum(b1_y2, b2_y2) - tf.maximum(b1_y1, b2_y1))
+
+        # Union Area
+        w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
+        w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
+        union = w1 * h1 + w2 * h2 - inter + eps
+
+        iou = inter / union
+        if GIoU or DIoU or CIoU:
+            # 这里计算得到一个最小的边框, 这个边框刚好能将b1,b2包住
+            cw = tf.maximum(b1_x2, b2_x2) - tf.minimum(b1_x1, b2_x1)
+            ch = tf.maximum(b1_y2, b2_y2) - tf.minimum(b1_y1, b2_y1)
+            if CIoU or DIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+                c2 = cw ** 2 + ch ** 2 + eps  # convex diagonal squared
+                rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 +
+                        (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # center distance squared
+                if DIoU:
+                    return iou - rho2 / c2  # DIoU
+                elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+                    # with torch.no_grad():)
+                    v = (4 / math.pi ** 2) * tf.pow(tf.atan(w2 / h2) - tf.atan(w1 / h1), 2)
+                    # with torch.no_grad():
+                    #     alpha = v / (v - iou + (1 + eps))
+                    alpha = tf.stop_gradient(v / (v - iou + (1 + eps)))
+                    return iou - (rho2 / c2 + v * alpha)  # CIoU
+            else:  # GIoU https://arxiv.org/pdf/1902.09630.pdf
+                c_area = cw * ch + eps  # convex area
+                return iou - (c_area - union) / c_area  # GIoU
+        else:
+            return iou
+
+    def ohem_conf_loss(self, pred_cls, true_cls, pos):
         """ 计算分类损失
         :param pred_cls: [batch, num_priors, num_classes]
         :param true_cls: [batch, num_priors]
         :param pos: [batch, num_priors]
-        :param batch_size:
         :return:
         """
         # Compute max conf across batch for hard negative mining
         # batch_conf = np.reshape(conf_data, [-1, self.num_classes])
-        # conf_max = np.max(batch_conf)
-        # loss_c = np.log(np.sum(np.exp(batch_conf-conf_max), 1)) + conf_max - batch_conf[:, 0]
+        # conf_max = tf.reduce_max(pred_cls)
+        # loss_c = tf.math.log(tf.reduce_sum(tf.math.exp(pred_cls-conf_max), axis=-1)) + conf_max - pred_cls[:, 0]
         # loss_c = log_sum_exp(batch_conf) - batch_conf[:, 0]
         # batch_conf = tf.math.softmax(batch_conf, dim=1)
-        # loss_c = np.max(batch_conf[:, 1:], axis=1)
+        loss_c = tf.reduce_max(pred_cls[..., 1:], axis=-1)
         # loss_c = np.max(batch_conf, axis=1)
-        loss_c = tf.reduce_max(pred_cls, axis=-1)
+        # loss_c = tf.reduce_max(pred_cls, axis=-1)
 
         # Hard Negative Mining
         # loss_c = np.reshape(loss_c, [batch_size, -1])
@@ -57,7 +113,7 @@ class MultiBoxLoss:
         pos_samples = tf.zeros((pos_indices.get_shape()[0]))
         loss_c = tf.tensor_scatter_nd_update(loss_c, pos_indices, pos_samples)
         # loss_c[pos] = 0
-        # 过滤掉容易分的负样本
+        # 负样本
         easy_neg_indices = tf.where(true_cls < 0)
         easy_neg_samples = tf.zeros((easy_neg_indices.get_shape()[0]))
         loss_c = tf.tensor_scatter_nd_update(loss_c, easy_neg_indices, easy_neg_samples)
@@ -253,7 +309,7 @@ class MultiBoxLoss:
         # pred_mask_proto = pred_mask_proto.numpy()
 
         batch_loc = []
-        batch_conf = []
+        batch_true_cls = []
         batch_prior_gt_boxes = []
         batch_best_truth_idx = []
         for i in range(self.batch_size):
@@ -261,22 +317,25 @@ class MultiBoxLoss:
             # loc:[num_priors, 4(cx,cy,cw,ch)]
             # conf:[num_priors]
             # best_truth_idx:[num_priors]
-            loc, prior_gt_boxes, conf, best_truth_idx = match(
+            loc, prior_gt_boxes, true_cls, best_truth_idx = match(
                 self.priors, gt_boxes[i], gt_labels[i], self.pos_thresh, self.neg_thresh)
             # prior_gt_boxes = gt_boxes[i][best_truth_idx]
 
             batch_loc.append(loc)
-            batch_conf.append(conf)
+            batch_true_cls.append(true_cls)
             batch_prior_gt_boxes.append(prior_gt_boxes)
             batch_best_truth_idx.append(best_truth_idx)
 
         loc_all = np.array(batch_loc, dtype=np.float32)
-        conf_all = np.array(batch_conf, dtype=np.float32)
+        batch_true_cls = np.array(batch_true_cls, dtype=np.float32)
         prior_gt_boxes_all = np.array(batch_prior_gt_boxes, dtype=np.float32)
         batch_best_truth_idx = np.array(batch_best_truth_idx, dtype=np.int32)
 
         # 所有非背景边框损失
-        pos = conf_all > 0
+        pos = batch_true_cls > 0
+        # decode_pred_box = decode(pred_box, self.priors)[pos]
+        # box_loss = 1. - self.bbox_iou(decode_pred_box, prior_gt_boxes_all[pos])
+        # box_loss = tf.reduce_sum(box_loss) / self.batch_size
         box_loss = self.smooth_l1_loss(pred_box[pos], loc_all[pos])
         box_loss /= self.batch_size
 
@@ -286,7 +345,7 @@ class MultiBoxLoss:
         mask_loss /= self.batch_size
 
         # 类别损失
-        cls_loss = self.ohem_conf_loss(pred_cls, conf_all, pos, self.batch_size)
+        cls_loss = self.ohem_conf_loss(pred_cls, batch_true_cls, pos)
         cls_loss /= self.batch_size
 
         # 语义分割损失

@@ -17,7 +17,8 @@ class HeadLayer(tf.keras.layers.Layer):
         self.conv1 = tf.keras.layers.Conv2D(256, kernel_size=3, padding='same')
         self.relu1 = tf.keras.layers.ReLU()
         self.conv_box = tf.keras.layers.Conv2D(len(self.aspect_ratios)*4,kernel_size=3, padding='same')
-        self.conv_cls = tf.keras.layers.Conv2D(len(self.aspect_ratios)*self.num_classes,kernel_size=3, padding='same')
+        # 预测类别的第一位为background，第二位开始为类别
+        self.conv_cls = tf.keras.layers.Conv2D(len(self.aspect_ratios)*(self.num_classes+1),kernel_size=3, padding='same')
         self.conv_mask = tf.keras.layers.Conv2D(len(self.aspect_ratios)*self.mask_proto_channels,kernel_size=3, padding='same')
 
     def call(self, inputs, *args, **kwargs):
@@ -26,7 +27,7 @@ class HeadLayer(tf.keras.layers.Layer):
         box = self.conv_box(x)
         box = tf.keras.layers.Reshape([-1, 4])(box)
         cls = self.conv_cls(x)
-        cls = tf.keras.layers.Reshape([-1, self.num_classes])(cls)
+        cls = tf.keras.layers.Reshape([-1, self.num_classes+1])(cls)
         cls = tf.keras.layers.Softmax()(cls)
         mask = self.conv_mask(x)
         mask = tf.keras.activations.tanh(mask)
