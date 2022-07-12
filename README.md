@@ -1,5 +1,18 @@
 ## Yolact
 
+### 模型测试
+
+- 训练 [coco val5k](http://images.cocodataset.org/annotations/annotations_trainval2017.zip)
+
+<img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_loss.png" width="1000" height="500"/> 
+
+- 检测/分割效果
+
+<img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_1.png" width="350" height="230"/> (<img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_2.png" width="350" height="230"/>)
+
+<img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_3.png" width="350" height="230"/>  <img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_4.png" width="350" height="230"/>
+
+
 ### Get start
 
 1. 训练
