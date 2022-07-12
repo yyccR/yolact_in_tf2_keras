@@ -15,6 +15,7 @@ from box_utils import detect,decode
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
+abs_file_path = os.path.dirname(os.path.abspath(__file__))
 
 def main():
     epochs = 300
@@ -24,10 +25,11 @@ def main():
     # 类别数
     num_class = 91
     batch_size = 5
-    # -1表示全部数据参与训练
-    train_img_nums = 5
+    # -1表示全部数据参与训练, 拿val数据共5k训练, 拿train数据500个验证
+    train_img_nums = -1
     train_coco_json = './data/instances_val2017.json'
-    val_coco_json = './data/instances_val2017.json'
+    val_img_nums = 500
+    val_coco_json = './data/instances_train2017.json'
 
     # 类别名, 也可以自己提供一个数组, 不通过coco
     classes = ['none', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
@@ -42,13 +44,6 @@ def main():
                'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'none', 'book', 'clock',
                'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
 
-    # 这里anchor归一化到[0,1]区间
-    # anchors = np.array([[10, 13], [16, 30], [33, 23],
-    #                     [30, 61], [62, 45], [59, 119],
-    #                     [116, 90], [156, 198], [373, 326]]) / 640.
-    # anchors = np.array(anchors, dtype=np.float32)
-    # 分别对应1/8, 1/16, 1/32预测输出层
-    # anchor_masks = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]], dtype=np.int8)
     # tensorboard日志
     summary_writer = tf.summary.create_file_writer(log_dir)
     # data generator
@@ -57,6 +52,7 @@ def main():
         train_img_nums=train_img_nums,
         img_shape=image_shape,
         batch_size=batch_size,
+        max_instances=40,
         include_mask=True,
         include_crowd=False,
         include_keypoint=False,
@@ -64,17 +60,19 @@ def main():
         using_argument=False
     )
     # 验证集
-    # val_coco_data = CoCoDataGenrator(
-    #     coco_annotation_file=val_coco_json,
-    #     train_img_nums=-1,
-    #     img_shape=image_shape,
-    #     batch_size=batch_size,
-    #     include_mask=False,
-    #     include_crowd=False,
-    #     include_keypoint=False,
-    #     need_down_image=False,
-    #     using_argument=False
-    # )
+    val_coco_data = CoCoDataGenrator(
+        coco_annotation_file= val_coco_json,
+        train_img_nums=val_img_nums,
+        img_shape=image_shape,
+        batch_size=batch_size,
+        max_instances=40,
+        include_mask=True,
+        include_crowd=False,
+        include_keypoint=False,
+        need_down_image=False,
+        using_argument=False,
+        download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+    )
 
     yolact = Yolact(
         input_shape=image_shape,
@@ -102,7 +100,6 @@ def main():
     )
 
     pre_mAP = 0.
-    # data = coco_data.next_batch()
     for epoch in range(epochs):
         train_progress_bar = tqdm.tqdm(range(coco_data.total_batch_size), desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
         for batch in train_progress_bar:
@@ -176,7 +173,7 @@ def main():
                     random_cls_scores = out_scores[random_one]
                     random_labels = out_classes[random_one]
                     for i, box_obj_cls in enumerate(random_boxes):
-                        if random_cls_scores[i] > 0.6:
+                        if random_cls_scores[i] > 0.5:
                             label = int(random_labels[i])
                             if coco_data.coco.cats.get(label):
                                 class_name = coco_data.coco.cats[label]['name']

@@ -52,7 +52,9 @@ class CoCoDataGenrator:
         self.coco_annotation_file = coco_annotation_file
 
         self.current_batch_index = 0
+        self.current_index = 0
         self.total_batch_size = 0
+        self.total_size = 0
         self.img_ids = []
         self.coco = COCO(annotation_file=coco_annotation_file)
         self.load_data()
@@ -76,6 +78,7 @@ class CoCoDataGenrator:
 
         self.total_batch_size = len(target_img_ids) // self.batch_size
         self.img_ids = target_img_ids
+        self.total_size = len(target_img_ids)
 
     def download_image_files(self):
         """下载coco图片数据"""
@@ -100,51 +103,78 @@ class CoCoDataGenrator:
                         print("current img_id: ", img_id, "current img_file: ", file_path)
 
     def next_batch(self):
-        if self.current_batch_index >= self.total_batch_size:
-            self.current_batch_index = 0
-            self._on_epoch_end()
-
-        batch_img_ids = self.img_ids[self.current_batch_index * self.batch_size:
-                                     (self.current_batch_index + 1) * self.batch_size]
+        # if self.current_batch_index >= self.total_batch_size:
+        #     self.current_batch_index = 0
+        #     self._on_epoch_end()
+        #
+        # batch_img_ids = self.img_ids[self.current_batch_index * self.batch_size:
+        #                              (self.current_batch_index + 1) * self.batch_size]
         batch_imgs = []
         batch_bboxes = []
         batch_labels = []
         batch_masks = []
         batch_keypoints = []
         valid_nums = []
-        for img_id in batch_img_ids:
-            # {"img":, "bboxes":, "labels":, "masks":, "key_points":}
+
+        while len(batch_imgs) < self.batch_size:
+
+            if self.current_index >= self.total_size:
+                self.current_index = 0
+                self._on_epoch_end()
+
+            img_id = self.img_ids[self.current_index]
             data = self._data_generation(image_id=img_id)
             if len(np.shape(data['imgs'])) > 0:
+
                 if len(data['bboxes']) > 0:
                     batch_imgs.append(data['imgs'])
                     batch_labels.append(data['labels'])
-                    # print(np.shape(data['bboxes']))
                     batch_bboxes.append(data['bboxes'])
                     valid_nums.append(data['valid_nums'])
-                    # if len(data['labels']) > self.max_instances:
-                    #     batch_bboxes.append(data['bboxes'][:self.max_instances, :])
-                    #     batch_labels.append(data['labels'][:self.max_instances])
-                    #     valid_nums.append(self.max_instances)
-                    # else:
-                    #     pad_num = self.max_instances - len(data['labels'])
-                    #     batch_bboxes.append(np.pad(data['bboxes'], [(0, pad_num), (0, 0)]))
-                    #     batch_labels.append(np.pad(data['labels'], [(0, pad_num)]))
-                    #     valid_nums.append(len(data['labels']))
 
                     if self.include_mask:
                         if data['masks'].shape == (self.img_shape[0], self.img_shape[1], self.max_instances):
                             batch_masks.append(data['masks'])
-                        else:
-                            return self.next_batch()
 
                     if self.include_keypoint:
                         batch_keypoints.append(data['keypoints'])
 
-        self.current_batch_index += 1
+            self.current_index += 1
 
-        if len(batch_imgs) < self.batch_size:
-            return self.next_batch()
+        # for img_id in batch_img_ids:
+        #     # {"img":, "bboxes":, "labels":, "masks":, "key_points":}
+        #     data = self._data_generation(image_id=img_id)
+        #     if len(np.shape(data['imgs'])) > 0:
+        #         if len(data['bboxes']) > 0:
+        #             batch_imgs.append(data['imgs'])
+        #             batch_labels.append(data['labels'])
+        #             # print(np.shape(data['bboxes']))
+        #             batch_bboxes.append(data['bboxes'])
+        #             valid_nums.append(data['valid_nums'])
+        #             # if len(data['labels']) > self.max_instances:
+        #             #     batch_bboxes.append(data['bboxes'][:self.max_instances, :])
+        #             #     batch_labels.append(data['labels'][:self.max_instances])
+        #             #     valid_nums.append(self.max_instances)
+        #             # else:
+        #             #     pad_num = self.max_instances - len(data['labels'])
+        #             #     batch_bboxes.append(np.pad(data['bboxes'], [(0, pad_num), (0, 0)]))
+        #             #     batch_labels.append(np.pad(data['labels'], [(0, pad_num)]))
+        #             #     valid_nums.append(len(data['labels']))
+        #
+        #             if self.include_mask:
+        #                 if data['masks'].shape == (self.img_shape[0], self.img_shape[1], self.max_instances):
+        #                     batch_masks.append(data['masks'])
+        #                 else:
+        #                     print("recursive")
+        #                     return self.next_batch()
+        #
+        #             if self.include_keypoint:
+        #                 batch_keypoints.append(data['keypoints'])
+        #
+        # self.current_batch_index += 1
+        #
+        # if len(batch_imgs) < self.batch_size:
+        #     return self.next_batch()
 
         output = {
             'imgs': np.array(batch_imgs, dtype=np.int32),
@@ -186,7 +216,7 @@ class CoCoDataGenrator:
     def _resize_mask(self, origin_masks):
         """ resize mask数据
         :param origin_mask:
-        :return: mask_resize: [instance, h, w]
+        :return: mask_resize: [h, w, instance_num]
                  gt_boxes: [N, [ymin, xmin, ymax, xmax]]
         """
         mask_shape = np.shape(origin_masks)
@@ -363,11 +393,10 @@ class CoCoDataGenrator:
             # [h, w, instances]
             masks, _ = self._resize_mask(origin_masks=masks)
             if np.shape(masks)[2] > self.max_instances:
-                masks = masks[:self.max_instances, :, :]
+                masks = masks[:, :, :self.max_instances]
             else:
                 pad_num = self.max_instances - np.shape(masks)[2]
                 masks = np.pad(masks, [(0, 0), (0, 0), (0, pad_num)])
-
             outputs['masks'] = masks
             # outputs['bboxes'] = bboxes
 
@@ -448,42 +477,42 @@ if __name__ == "__main__":
     from data.visual_ops import draw_bounding_box, draw_instance
 
     # file = "./cat_dog_face_data/train_annotations.json"
-    file = "./instances_val2017.json"
+    file = "./instances_train2017.json"
     # file = "./yanhua/annotations.json"
     coco = CoCoDataGenrator(
         coco_annotation_file=file,
-        train_img_nums=30,
+        train_img_nums=-1,
         max_instances=6,
         include_mask=True,
         include_keypoint=False,
-        need_down_image=False,
+        need_down_image=True,
         batch_size=1,
         using_argument=False
     )
 
-    data = coco.next_batch()
+    # data = coco.next_batch()
     # data = coco._data_generation(2)
-    gt_imgs = data['imgs']
-    gt_boxes = data['bboxes']
-    gt_classes = data['labels']
-    gt_masks = data['masks']
-    valid_nums = data['valid_nums']
-    print(gt_boxes)
-
-    img = gt_imgs if len(np.shape(gt_imgs)) == 3 else gt_imgs[-1]
-    valid_num = [valid_nums] if type(valid_nums) == int else valid_nums
-    gt_classes = [gt_classes] if len(np.shape(gt_classes)) == 1 else gt_classes
-    gt_boxes = [gt_boxes] if len(np.shape(gt_boxes)) == 2 else gt_boxes
-    gt_masks = [gt_masks] if len(np.shape(gt_masks)) == 3 else gt_masks
-    for i in range(valid_num[-1]):
-        label = float(gt_classes[-1][i])
-        label_name = coco.coco.cats[label]['name']
-        x1, y1, x2, y2 = gt_boxes[-1][i]
-        mask = gt_masks[-1][:, :, i]
-        img = draw_instance(img, mask)
-        img = draw_bounding_box(img, label_name, label, x1, y1, x2, y2)
-    cv2.imshow("", img)
-    cv2.waitKey(0)
+    # gt_imgs = data['imgs']
+    # gt_boxes = data['bboxes']
+    # gt_classes = data['labels']
+    # gt_masks = data['masks']
+    # valid_nums = data['valid_nums']
+    # print(gt_boxes)
+    #
+    # img = gt_imgs if len(np.shape(gt_imgs)) == 3 else gt_imgs[-1]
+    # valid_num = [valid_nums] if type(valid_nums) == int else valid_nums
+    # gt_classes = [gt_classes] if len(np.shape(gt_classes)) == 1 else gt_classes
+    # gt_boxes = [gt_boxes] if len(np.shape(gt_boxes)) == 2 else gt_boxes
+    # gt_masks = [gt_masks] if len(np.shape(gt_masks)) == 3 else gt_masks
+    # for i in range(valid_num[-1]):
+    #     label = float(gt_classes[-1][i])
+    #     label_name = coco.coco.cats[label]['name']
+    #     x1, y1, x2, y2 = gt_boxes[-1][i]
+    #     mask = gt_masks[-1][:, :, i]
+    #     img = draw_instance(img, mask)
+    #     img = draw_bounding_box(img, label_name, label, x1, y1, x2, y2)
+    # cv2.imshow("", img)
+    # cv2.waitKey(0)
 
     # data = coco.next_batch()
     # print(data)

@@ -2,7 +2,7 @@
 
 ### 模型测试
 
-- 训练 [coco val5k](http://images.cocodataset.org/annotations/annotations_trainval2017.zip)
+- 训练 [coco val 5k](http://images.cocodataset.org/annotations/annotations_trainval2017.zip)
 
 <img src="https://raw.githubusercontent.com/yyccR/Pictures/master/yolact/yolact_train_loss.png" width="1000" height="500"/> 
 
