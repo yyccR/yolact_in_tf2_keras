@@ -77,9 +77,9 @@ def nms(decoded_boxes, masks, scores, image_size=640, iou_threshold=0.5, conf_th
     """
     batch_size = decoded_boxes.shape[0]
     num_classes = scores.shape[2] - 1
-    decoded_boxes = decoded_boxes.numpy()
-    masks = masks.numpy()
-    scores = scores.numpy()
+    decoded_boxes = np.array(decoded_boxes)
+    masks = np.array(masks)
+    scores = np.array(scores)
 
     batch_boxes = []
     batch_masks = []

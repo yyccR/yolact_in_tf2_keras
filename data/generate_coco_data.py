@@ -266,15 +266,20 @@ class CoCoDataGenrator:
         if os.path.isfile(img_local_file):
             img = io.imread(img_local_file)
         elif img_coco_url_file.startswith("http"):
-            download_image_file = self.download_image_path + "./{}.jpg".format(image_id)
-            if not os.path.isfile(download_image_file):
-                print("download image from {}".format(img_coco_url_file))
-                im = io.imread(img_coco_url_file)
-                io.imsave(download_image_file, im)
-                print("save image {}".format(download_image_file))
-            img = io.imread(download_image_file)
+            download_image_file = os.path.join(self.download_image_path, "./{}.jpg".format(image_id))
+            download_image_file_with_coco_name = os.path.join(self.download_image_path,
+                                                              self.coco.imgs[image_id].get('file_name', ""))
+            if os.path.isfile(download_image_file_with_coco_name):
+                img = io.imread(download_image_file_with_coco_name)
+            else:
+                if not os.path.isfile(download_image_file):
+                    print("download image from {}".format(img_coco_url_file))
+                    im = io.imread(img_coco_url_file)
+                    io.imsave(download_image_file, im)
+                    print("save image {}".format(download_image_file))
+                img = io.imread(download_image_file)
         elif img_url_file.startswith("http"):
-            download_image_file = self.download_image_path + "./{}.jpg".format(image_id)
+            download_image_file = os.path.join(self.download_image_path, "./{}.jpg".format(image_id))
             if not os.path.isfile(download_image_file):
                 print("download image from {}".format(img_url_file))
                 im = io.imread(img_url_file)

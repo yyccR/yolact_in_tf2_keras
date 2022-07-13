@@ -12,6 +12,7 @@ from data.generate_coco_data import CoCoDataGenrator
 from loss import MultiBoxLoss
 from yolact import Yolact
 from box_utils import detect,decode
+from val import val
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -26,9 +27,9 @@ def main():
     num_class = 91
     batch_size = 5
     # -1表示全部数据参与训练, 拿val数据共5k训练, 拿train数据500个验证
-    train_img_nums = -1
+    train_img_nums = 20
     train_coco_json = './data/instances_val2017.json'
-    val_img_nums = 500
+    val_img_nums = 5
     val_coco_json = './data/instances_train2017.json'
 
     # 类别名, 也可以自己提供一个数组, 不通过coco
@@ -59,10 +60,9 @@ def main():
         need_down_image=False,
         using_argument=False
     )
-    # 验证集
     val_coco_data = CoCoDataGenrator(
-        coco_annotation_file= val_coco_json,
-        train_img_nums=val_img_nums,
+        coco_annotation_file= train_coco_json,
+        train_img_nums=train_img_nums,
         img_shape=image_shape,
         batch_size=batch_size,
         max_instances=40,
@@ -70,9 +70,22 @@ def main():
         include_crowd=False,
         include_keypoint=False,
         need_down_image=False,
-        using_argument=False,
-        download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+        using_argument=False
     )
+    # 验证集
+    # val_coco_data = CoCoDataGenrator(
+    #     coco_annotation_file= val_coco_json,
+    #     train_img_nums=val_img_nums,
+    #     img_shape=image_shape,
+    #     batch_size=batch_size,
+    #     max_instances=40,
+    #     include_mask=True,
+    #     include_crowd=False,
+    #     include_keypoint=False,
+    #     need_down_image=False,
+    #     using_argument=False,
+    #     download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+    # )
 
     yolact = Yolact(
         input_shape=image_shape,
@@ -158,6 +171,7 @@ def main():
                 # pred, 同样只拿随机一个batch的pred
                 pred_img = gt_imgs[random_one].copy() * 255
                 out_boxes = decode(yolact_preds[0], yolact.feature_prior_data)
+                print(np.max(yolact_preds[1]))
                 out_boxes, out_classes, out_scores, out_masks = detect(
                     pred_boxes=out_boxes,
                     pred_classes=yolact_preds[1],
@@ -190,15 +204,15 @@ def main():
                     tf.summary.image("imgs/gt,pred,epoch{}".format(epoch), summ_imgs,
                                      step=epoch * coco_data.total_batch_size + batch)
         # 这里计算一下训练集的mAP
-        # val(model=yolo, val_data_generator=coco_data, classes=classes, desc='training dataset val')
+        val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='training dataset val')
         # # 这里计算验证集的mAP
-        # mAP50, mAP, final_df = val(model=yolo, val_data_generator=val_coco_data, classes=classes, desc='val dataset val')
+        # mAP50, mAP, final_df = val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='val dataset val')
         # if mAP > pre_mAP:
         #     pre_mAP = mAP
-        #     yolo.yolov5.save_weights(log_dir+"/yolov{}-best.h5".format(yolov5_type))
-        #     print("save {}/yolov{}-best.h5 best weight with {} mAP.".format(log_dir, yolov5_type, mAP))
-        # yolo.yolov5.save_weights(log_dir+"/yolov{}-last.h5".format(yolov5_type))
-        # print("save {}/yolov{}-last.h5 last weights at epoch {}.".format(log_dir, yolov5_type, epoch))
+        #     yolact.model.save_weights(log_dir+"/yolact-best.h5")
+        #     print("save {}/yolact-best.h5 best weight with {} mAP.".format(log_dir, mAP))
+        # yolact.model.save_weights(log_dir+"/yolact-last.h5")
+        # print("save {}/yolact-last.h5 last weights at epoch {}.".format(log_dir, epoch))
 
 
 if __name__ == "__main__":
