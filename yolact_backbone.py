@@ -7,18 +7,17 @@ class BottleneckLayer(tf.keras.layers.Layer):
                  output_channels,
                  strides=1,
                  downsample=None,
-                 norm_layer=tf.keras.layers.BatchNormalization,
                  dilation=1):
         super(BottleneckLayer, self).__init__()
         self.conv1 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=1, use_bias=False,
                                             dilation_rate=dilation)
-        self.bn1 = norm_layer()
+        self.bn1 = tf.keras.layers.BatchNormalization(momentum=0.95)
         self.conv2 = tf.keras.layers.Conv2D(filters=output_channels, kernel_size=3, strides=strides, padding='same',
                                             use_bias=False, dilation_rate=dilation)
-        self.bn2 = norm_layer()
+        self.bn2 = tf.keras.layers.BatchNormalization(momentum=0.95)
         self.conv3 = tf.keras.layers.Conv2D(filters=output_channels * 4, kernel_size=1, use_bias=False,
                                             dilation_rate=dilation)
-        self.bn3 = norm_layer()
+        self.bn3 = tf.keras.layers.BatchNormalization(momentum=0.95)
         self.relu = tf.keras.layers.ReLU()
         self.downsample = downsample
         self.stride = strides
@@ -51,13 +50,11 @@ class ResnetBackbone:
                  input_shape=[640, 640, 3],
                  layers=[3, 4, 23, 3],
                  atrous_layers=[],
-                 block=BottleneckLayer,
-                 norm_layer=tf.keras.layers.BatchNormalization):
+                 block=BottleneckLayer):
         self.input_shape = input_shape
         self.num_base_layers = len(layers)
         self.layers = layers
         self.channels = []
-        self.norm_layer = norm_layer
         self.dilation = 1
         self.atrous_layers = atrous_layers
         self.inplanes = 64
@@ -76,14 +73,14 @@ class ResnetBackbone:
                                        strides=stride,
                                        use_bias=False,
                                        dilation_rate=self.dilation),
-                self.norm_layer()
+                tf.keras.layers.BatchNormalization(momentum=0.95)
             ])
 
         layers = tf.keras.Sequential()
-        layers.add(self.block(output_channels, stride, downsample, self.norm_layer, self.dilation))
+        layers.add(self.block(output_channels, stride, downsample, self.dilation))
         self.inplanes = output_channels * 4
         for i in range(1, blocks):
-            layers.add(self.block(output_channels, norm_layer=self.norm_layer))
+            layers.add(self.block(output_channels))
         self.channels.append(output_channels * 4)
         return layers
 
@@ -92,7 +89,7 @@ class ResnetBackbone:
         input = tf.keras.layers.Input(shape=self.input_shape)
         # 1/2
         x = tf.keras.layers.Conv2D(filters=64, kernel_size=7, strides=2, padding='same', use_bias=False)(input)
-        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.BatchNormalization(momentum=0.95)(x)
         x = tf.keras.layers.ReLU()(x)
         # 1/4
         x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2, padding='same')(x)
