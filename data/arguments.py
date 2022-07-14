@@ -63,10 +63,11 @@ class Arugments:
         ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
         return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
 
-    def random_mosaic(self, images, boxes, target_img_size):
+    def random_mosaic(self, images, boxes, masks, target_img_size):
         """ 4图拼接
         :param images: (4, , , c)
         :param boxes: (4, (x1,y1,x2,y2,...))
+        :param masks: (4, (n,h,w))
         :param img_size: 输出的图片大小
         :return: [h,w,c]
         """
@@ -74,10 +75,16 @@ class Arugments:
         boxes4 = []
         s = target_img_size
         yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in mosaic_border)  # mosaic center x, y
+
+        masks4 = []
+
         for i, img in enumerate(images):
             # Load image
             # img, _, (h, w) = self.load_image(index)
             h, w, _ = img.shape
+            num_masks = len(masks[i])
+            if num_masks:
+                masks4_tmp = np.full((num_masks, s * 2, s * 2), 0, dtype=np.uint8)
             # place img in img4
             if i == 0:  # top left
                 img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
@@ -96,6 +103,7 @@ class Arugments:
                 x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
             img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+
             padw = x1a - x1b
             padh = y1a - y1b
 
@@ -104,15 +112,21 @@ class Arugments:
                 new_boxes = self._xyxy_pad_and_clip(boxes[i], padw, padh, 0, 2 * s)
                 new_area = (new_boxes[:, 2] - new_boxes[:, 0]) * (new_boxes[:, 3] - new_boxes[:, 1])
                 origin_area = (boxes[i][:, 2] - boxes[i][:, 0]) * (boxes[i][:, 3] - boxes[i][:, 1])
-                new_boxes = new_boxes[(new_area / origin_area) >= self.mosaic_min_area_percent, :]
+                keep = (new_area / origin_area) >= self.mosaic_min_area_percent
+                new_boxes = new_boxes[keep, :]
                 if new_boxes.shape[0]:
                     boxes4.append(new_boxes)
+                if num_masks:
+                    masks4_tmp[:, y1a:y2a, x1a:x2a] = masks[i][:, y1b:y2b, x1b:x2b]
+                    masks4.append(masks4_tmp[keep])
 
         if boxes4:
             boxes4 = np.concatenate(boxes4, axis=0)
-        return img4, boxes4
+            if masks4:
+                masks4 = np.concatenate(masks4, axis=0)
+        return img4, boxes4, masks4
 
-    def random_perspective(self, im, boxes=(), border=(0, 0)):
+    def random_perspective(self, im, boxes=(), masks=[], border=(0, 0)):
         """ 随机映射变换, 此步包含平移, 透视变换, 旋转缩放, 错切, 平移"""
         # targets = [cls, xyxy]
 
@@ -147,13 +161,26 @@ class Arugments:
         T[0, 2] = random.uniform(0.5 - self.translate, 0.5 + self.translate) * width  # x translation (pixels)
         T[1, 2] = random.uniform(0.5 - self.translate, 0.5 + self.translate) * height  # y translation (pixels)
 
+        # 处理masks
+        if len(masks) > 0:
+            # [instances, h, w] => [h, w, instances]
+            masks = np.transpose(np.array(masks, dtype=np.float32), [1,2,0])
+
         # 综合所有变换矩阵
         M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
         if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
             if self.perspective:
                 im = cv2.warpPerspective(im, M, dsize=(width, height), borderValue=(114, 114, 114))
+                if len(masks) > 0:
+                    masks = cv2.warpPerspective(masks, M, dsize=(width, height), borderValue=(114, 114, 114))
             else:  # affine
                 im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
+                if len(masks) > 0:
+                    masks = cv2.warpAffine(masks, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
+
+        if len(masks) > 0:
+            # [h, w, instances] => [instances, h, w]
+            masks = np.transpose(np.array(masks > 0.5, dtype=np.int32), [2,0,1])
 
         # 目标边框跟随变换
         n = len(boxes)
@@ -175,8 +202,10 @@ class Arugments:
             i = self._box_candidates(box1=boxes[:, :4].T * s, box2=new.T, area_thr=0.10)
             boxes = boxes[i]
             boxes[:, :4] = new[i]
+            if len(masks) >0:
+                masks = masks[i]
 
-        return im, boxes
+        return im, boxes, masks
 
     def random_hsv(self, im):
         """ 曝光, 饱和, 亮度变换 """
@@ -291,9 +320,9 @@ if __name__ == "__main__":
 
     ag = Arugments()
     im = ag.random_hsv(im)
-    im, box = ag.random_perspective(im, box)
+    im, box, _ = ag.random_perspective(im, box, [])
     im2, box2 = ag.random_flip(im, box)
-    im3, box3 = ag.random_mosaic(images=[im, im, im, im], boxes=([box, box, box, box]),
+    im3, box3, _ = ag.random_mosaic(images=[im, im, im, im], boxes=([box, box, box, box]), masks=[[],[],[],[]],
                                  target_img_size=320)
     im4, box4 = ag.random_mixup(im, box, im2, box2)
     coco = CoCoDataGenrator(

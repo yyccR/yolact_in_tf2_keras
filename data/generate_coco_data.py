@@ -442,9 +442,11 @@ class CoCoDataGenrator:
             if r < 0.5:
                 input_images = [img]
                 input_bboxes = [np.concatenate([annotations['bboxes'], annotations['labels'][:,None]], axis=-1)]
+                input_masks = [annotations['masks']]
                 # 马赛克4图拼接
-                ids = random.sample(self.img_ids,3)
-                for id in ids:
+                # ids = random.sample(self.img_ids,3)
+                while len(input_images) < 4:
+                    id = random.choice(self.img_ids)
                     img_i = self._load_image(id)
                     if img_i.shape[0]:
                         input_images.append(img_i)
@@ -452,19 +454,22 @@ class CoCoDataGenrator:
                         input_bboxes.append(
                             np.concatenate([annotations_i['bboxes'], annotations_i['labels'][:,None]], axis=-1)
                         )
-                    else:
-                        return outputs
-                new_img, new_bboxes = self.argument.random_mosaic(input_images, input_bboxes, self.img_shape[0])
+                        input_masks.append(annotations_i['masks'])
+
+                new_img, new_bboxes, new_masks = \
+                    self.argument.random_mosaic(input_images, input_bboxes, input_masks, self.img_shape[0])
                 if len(new_bboxes)>0:
                     new_labels = new_bboxes[:,-1]
                     outputs['imgs'] = new_img
                     outputs['labels'] = new_labels
                     outputs['bboxes'] = new_bboxes[:,:-1]
+                    if self.include_mask:
+                        outputs['masks'] = new_masks
 
             elif r < 0.75:
                 # 平移/旋转/缩放/错切/透视变换
                 input_bboxes = np.concatenate([annotations['bboxes'], annotations['labels'][:, None]], axis=-1)
-                new_img, new_bboxes = self.argument.random_perspective(img, input_bboxes)
+                new_img, new_bboxes, new_masks = self.argument.random_perspective(img, input_bboxes, annotations['masks'])
                 # 曝光, 饱和, 亮度调整
                 new_img = self.argument.random_hsv(new_img)
                 if len(new_bboxes)>0:
@@ -472,7 +477,8 @@ class CoCoDataGenrator:
                     outputs['imgs'] = new_img
                     outputs['labels'] = new_labels
                     outputs['bboxes'] = new_bboxes[:, :-1]
-            # print(r, outputs['bboxes'])
+                    if self.include_mask:
+                        outputs['masks'] = new_masks
         return outputs
 
 
