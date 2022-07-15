@@ -136,10 +136,9 @@ def val(model, val_data_generator, classes, desc='val'):
         gt_masks = data['masks']
 
         if model.is_training:
-            # yolact_preds = model.model.predict(gt_imgs / 255.)
-            yolact_preds = model.model(gt_imgs, training=True)
+            yolact_preds = model.model.predict(gt_imgs / 255.)
+            # yolact_preds = model.model(gt_imgs, training=True)
             out_boxes = decode(yolact_preds[0], model.feature_prior_data)
-            print(np.max(yolact_preds[1]))
             out_boxes, out_classes, out_scores, out_masks = detect(
                 pred_boxes=out_boxes,
                 pred_classes=yolact_preds[1],
@@ -168,12 +167,12 @@ def val(model, val_data_generator, classes, desc='val'):
                 gt_class = gt_labels[i][:valid_nums[i]]
                 gt_box = gt_boxes[i][:valid_nums[i], :]
                 gt_mask = gt_masks[i][:, :, :valid_nums[i]]
-
                 # [n, m]
                 b_iou = box_iou(gt_box, out_boxes[i])
                 m_iou = mask_iou(gt_mask, out_masks[i])
+                # print(b_iou, m_iou)
                 # [n, m]
-                correct_label = gt_class[:, None] == out_scores[i]
+                correct_label = gt_class[:, None] == out_classes[i]
                 # [m, 10]
                 b_correct = np.zeros((out_boxes[i].shape[0], iou_vector.shape[0]), dtype=np.bool)
                 m_correct = np.zeros((out_boxes[i].shape[0], iou_vector.shape[0]), dtype=np.bool)
@@ -246,7 +245,7 @@ def main():
     # image = cv2.imread(image_path)
     val_dataset = './data/instances_train2017.json'
     # image_shape = (640, 640, 3)
-    image_shape = (384, 384, 3)
+    image_shape = (512, 512, 3)
     num_class = 91
     batch_size = 1
 

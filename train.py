@@ -19,17 +19,17 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 abs_file_path = os.path.dirname(os.path.abspath(__file__))
 
 def main():
-    epochs = 300
+    epochs = 500
     log_dir = './logs'
-    image_shape = (384, 384, 3)
+    image_shape = (512, 512, 3)
     assert (image_shape[0] % 8 == 0) & (image_shape[1] % 8 == 0), "image shape 必须为8的整数倍"
     # 类别数
     num_class = 91
     batch_size = 5
     # -1表示全部数据参与训练, 拿val数据共5k训练, 拿train数据500个验证
-    train_img_nums = 20
+    train_img_nums = -1
     train_coco_json = './data/instances_val2017.json'
-    val_img_nums = 5
+    val_img_nums = 500
     val_coco_json = './data/instances_train2017.json'
 
     # 类别名, 也可以自己提供一个数组, 不通过coco
@@ -58,21 +58,8 @@ def main():
         include_crowd=False,
         include_keypoint=False,
         need_down_image=False,
-        using_argument=False
+        using_argument=True
     )
-    val_coco_data = CoCoDataGenrator(
-        coco_annotation_file= train_coco_json,
-        train_img_nums=train_img_nums,
-        img_shape=image_shape,
-        batch_size=batch_size,
-        max_instances=40,
-        include_mask=True,
-        include_crowd=False,
-        include_keypoint=False,
-        need_down_image=False,
-        using_argument=False
-    )
-    # 验证集
     # val_coco_data = CoCoDataGenrator(
     #     coco_annotation_file= val_coco_json,
     #     train_img_nums=val_img_nums,
@@ -83,9 +70,22 @@ def main():
     #     include_crowd=False,
     #     include_keypoint=False,
     #     need_down_image=False,
-    #     using_argument=False,
-    #     download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+    #     using_argument=False
     # )
+    # 验证集
+    val_coco_data = CoCoDataGenrator(
+        coco_annotation_file=val_coco_json,
+        train_img_nums=val_img_nums,
+        img_shape=image_shape,
+        batch_size=batch_size,
+        max_instances=40,
+        include_mask=True,
+        include_crowd=False,
+        include_keypoint=False,
+        need_down_image=False,
+        using_argument=False,
+        download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+    )
 
     yolact = Yolact(
         input_shape=image_shape,
@@ -96,14 +96,17 @@ def main():
         nms_thres=0.5
     )
     yolact.model.summary(line_length=200)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0005)
+    # optimizer = tf.keras.optimizers.SGD(learning_rate=0.0001)
+    # optimizer = tf.keras.optimizers.Adadelta(learning_rate=0.001)
+    # optimizer = tf.keras.optimizers.Nadam(learning_rate=0.001)
 
     loss_fn = MultiBoxLoss(
         batch_size=batch_size,
         num_classes=num_class,
         priors=yolact.feature_prior_data,
         conf_alpha=3,
-        bbox_alpha=1,
+        bbox_alpha=0.1,
         semantic_segmentation_alpha=1,
         mask_alpha=6.125,
         pos_thresh=0.5,
@@ -171,7 +174,6 @@ def main():
                 # pred, 同样只拿随机一个batch的pred
                 pred_img = gt_imgs[random_one].copy() * 255
                 out_boxes = decode(yolact_preds[0], yolact.feature_prior_data)
-                print(np.max(yolact_preds[1]))
                 out_boxes, out_classes, out_scores, out_masks = detect(
                     pred_boxes=out_boxes,
                     pred_classes=yolact_preds[1],
@@ -204,15 +206,15 @@ def main():
                     tf.summary.image("imgs/gt,pred,epoch{}".format(epoch), summ_imgs,
                                      step=epoch * coco_data.total_batch_size + batch)
         # 这里计算一下训练集的mAP
-        val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='training dataset val')
+        # val(model=yolact, val_data_generator=coco_data, classes=classes, desc='training dataset val')
         # # 这里计算验证集的mAP
-        # mAP50, mAP, final_df = val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='val dataset val')
-        # if mAP > pre_mAP:
-        #     pre_mAP = mAP
-        #     yolact.model.save_weights(log_dir+"/yolact-best.h5")
-        #     print("save {}/yolact-best.h5 best weight with {} mAP.".format(log_dir, mAP))
-        # yolact.model.save_weights(log_dir+"/yolact-last.h5")
-        # print("save {}/yolact-last.h5 last weights at epoch {}.".format(log_dir, epoch))
+        mAP50, mAP, final_df = val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='val dataset val')
+        if mAP > pre_mAP:
+            pre_mAP = mAP
+            yolact.model.save_weights(log_dir+"/yolact-best.h5")
+            print("save {}/yolact-best.h5 best weight with {} mAP.".format(log_dir, mAP))
+        yolact.model.save_weights(log_dir+"/yolact-last.h5")
+        print("save {}/yolact-last.h5 last weights at epoch {}.".format(log_dir, epoch))
 
 
 if __name__ == "__main__":
