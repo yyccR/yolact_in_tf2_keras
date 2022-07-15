@@ -16,6 +16,7 @@ class Arugments:
                  shear=0.3,
                  perspective=0.001,
                  mosaic_min_area_percent=0.4,
+                 mosaic_min_mask_area=20,
                  mix_up_beta=32.0):
         self.image_shape = image_shape
         self.hsv_h = hsv_h
@@ -27,6 +28,7 @@ class Arugments:
         self.shear = shear
         self.perspective = perspective
         self.mosaic_min_area_percent = mosaic_min_area_percent
+        self.mosaic_min_mask_area = mosaic_min_mask_area
         self.mix_up_beta = mix_up_beta
 
     def _xyxy_pad_and_clip(self, x, padw=0, padh=0, min_size=0, max_size=640):
@@ -114,11 +116,17 @@ class Arugments:
                 origin_area = (boxes[i][:, 2] - boxes[i][:, 0]) * (boxes[i][:, 3] - boxes[i][:, 1])
                 keep = (new_area / origin_area) >= self.mosaic_min_area_percent
                 new_boxes = new_boxes[keep, :]
-                if new_boxes.shape[0]:
-                    boxes4.append(new_boxes)
+
                 if num_masks:
                     masks4_tmp[:, y1a:y2a, x1a:x2a] = masks[i][:, y1b:y2b, x1b:x2b]
-                    masks4.append(masks4_tmp[keep])
+                    masks4_tmp = masks4_tmp[keep]
+                    for i, m in enumerate(masks4_tmp):
+                        if np.sum(m) > self.mosaic_min_mask_area:
+                            masks4.append(m[None, :, :])
+                            boxes4.append([new_boxes[i]])
+                else:
+                    if new_boxes.shape[0]:
+                        boxes4.append(new_boxes)
 
         if boxes4:
             boxes4 = np.concatenate(boxes4, axis=0)
@@ -164,7 +172,12 @@ class Arugments:
         # 处理masks
         if len(masks) > 0:
             # [instances, h, w] => [h, w, instances]
-            masks = np.transpose(np.array(masks, dtype=np.float32), [1,2,0])
+            if len(np.shape(masks)) > 2:
+                masks = np.transpose(np.array(masks, dtype=np.float32), [1, 2, 0])
+            elif len(np.shape(masks)) == 2:
+                masks = np.array(masks[:, :, None], dtype=np.float32)
+            else:
+                masks = np.zeros((height, width, len(boxes)), dtype=np.float32)
 
         # 综合所有变换矩阵
         M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
@@ -180,7 +193,12 @@ class Arugments:
 
         if len(masks) > 0:
             # [h, w, instances] => [instances, h, w]
-            masks = np.transpose(np.array(masks > 0.5, dtype=np.int32), [2,0,1])
+            if len(np.shape(masks)) > 2:
+                masks = np.transpose(np.array(masks > 0.5, dtype=np.int32), [2, 0, 1])
+            elif len(np.shape(masks)) == 2:
+                masks = np.array(masks[None, :, :], dtype=np.float32)
+            else:
+                masks = np.zeros((len(boxes), height, width), dtype=np.float32)
 
         # 目标边框跟随变换
         n = len(boxes)
@@ -199,11 +217,25 @@ class Arugments:
             new[:, [1, 3]] = new[:, [1, 3]].clip(0, height)
 
             # filter candidates
-            i = self._box_candidates(box1=boxes[:, :4].T * s, box2=new.T, area_thr=0.10)
-            boxes = boxes[i]
-            boxes[:, :4] = new[i]
-            if len(masks) >0:
-                masks = masks[i]
+            keep = self._box_candidates(box1=boxes[:, :4].T * s, box2=new.T, area_thr=0.10)
+            # boxes = boxes[i]
+            # boxes[:, :4] = new[i]
+            # if len(masks) >0:
+            #     masks = masks[i]
+
+            boxes = boxes[keep]
+            boxes[:, :4] = new[keep]
+
+            if len(masks) > 0:
+                masks = masks[keep]
+                out_masks = []
+                out_boxes = []
+                for i, m in enumerate(masks):
+                    if np.sum(m) > self.mosaic_min_mask_area:
+                        out_masks.append(m[None, :, :])
+                        out_boxes.append([boxes[i]])
+                masks = np.concatenate(out_masks, axis=0)
+                boxes = np.concatenate(out_boxes, axis=0)
 
         return im, boxes, masks
 
@@ -316,14 +348,14 @@ if __name__ == "__main__":
 
     f = "./tmp/Cats_Test49.jpg"
     im = cv2.imread(f)
-    box = np.array([[113, 137, 113 + 118, 137 + 139,1]])
+    box = np.array([[113, 137, 113 + 118, 137 + 139, 1]])
 
     ag = Arugments()
     im = ag.random_hsv(im)
     im, box, _ = ag.random_perspective(im, box, [])
     im2, box2 = ag.random_flip(im, box)
-    im3, box3, _ = ag.random_mosaic(images=[im, im, im, im], boxes=([box, box, box, box]), masks=[[],[],[],[]],
-                                 target_img_size=320)
+    im3, box3, _ = ag.random_mosaic(images=[im, im, im, im], boxes=([box, box, box, box]), masks=[[], [], [], []],
+                                    target_img_size=320)
     im4, box4 = ag.random_mixup(im, box, im2, box2)
     coco = CoCoDataGenrator(
         coco_annotation_file="./instances_val2017.json",
