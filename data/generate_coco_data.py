@@ -482,24 +482,56 @@ class CoCoDataGenrator:
         return outputs
 
 
-
-
 if __name__ == "__main__":
     from data.visual_ops import draw_bounding_box, draw_instance
-
+    # import tensorflow as tf
     # file = "./cat_dog_face_data/train_annotations.json"
-    file = "./instances_train2017.json"
+    file = "./instances_val2017.json"
     # file = "./yanhua/annotations.json"
     coco = CoCoDataGenrator(
         coco_annotation_file=file,
-        train_img_nums=-1,
+        train_img_nums=2,
         max_instances=6,
         include_mask=True,
         include_keypoint=False,
         need_down_image=True,
-        batch_size=1,
+        batch_size=2,
         using_argument=False
     )
+
+
+    # def gen():
+    #     for i in range(coco.total_batch_size):
+    #         yield coco.next_batch()
+    #
+    # data = tf.data.Dataset.from_generator(
+    #     generator=gen,
+    #     output_types={
+    #         'imgs': tf.float32,
+    #         'bboxes': tf.int16,
+    #         'labels': tf.int8,
+    #         'masks': tf.int8,
+    #         'keypoints': tf.int16,
+    #         'valid_nums': tf.int8
+    #     }
+    # )
+    # for _ in range(2):
+    #     for d in data:
+    #         print(d)
+            # valid_nums = np.array(d['valid_nums'], dtype=np.int32)
+            # print(valid_nums)
+            # gt_imgs = np.array(d['imgs'] / 255., dtype=np.float32)
+            # gt_boxes = [d['bboxes'][i][:valid_num] for i, valid_num in enumerate(valid_nums)]
+            # gt_labels = [d['labels'][i][:valid_num] for i, valid_num in enumerate(valid_nums)]
+            # gt_masks = [d['masks'][i][:, :, :valid_num] for i, valid_num in enumerate(valid_nums)]
+            # print(gt_labels)
+
+    # dataset = tf.data.Dataset.from_generator(
+    #     generator=gen,
+    #     output_types={},
+    #     output_shapes={}
+    #     args=coco
+    # )
 
     # data = coco.next_batch()
     # data = coco._data_generation(2)
