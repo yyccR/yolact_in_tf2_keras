@@ -439,7 +439,7 @@ class CoCoDataGenrator:
 
         if img.shape[0]:
             r = random.random()
-            if r < 0.5:
+            if r < 0.05:
                 input_images = [img]
                 input_bboxes = [np.concatenate([annotations['bboxes'], annotations['labels'][:,None]], axis=-1)]
                 input_masks = [annotations['masks']]
@@ -466,7 +466,7 @@ class CoCoDataGenrator:
                     if self.include_mask:
                         outputs['masks'] = new_masks
 
-            elif r < 0.75:
+            elif r < 0.15:
                 # 平移/旋转/缩放/错切/透视变换
                 input_bboxes = np.concatenate([annotations['bboxes'], annotations['labels'][:, None]], axis=-1)
                 new_img, new_bboxes, new_masks = self.argument.random_perspective(img, input_bboxes, annotations['masks'])
@@ -480,7 +480,6 @@ class CoCoDataGenrator:
                     if self.include_mask:
                         outputs['masks'] = new_masks
         return outputs
-
 
 
 

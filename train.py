@@ -14,7 +14,7 @@ from yolact import Yolact
 from box_utils import detect,decode
 from val import val
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 abs_file_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,10 +27,10 @@ def main():
     num_class = 91
     batch_size = 5
     # -1表示全部数据参与训练, 拿val数据共5k训练, 拿train数据500个验证
-    train_img_nums = -1
-    train_coco_json = './data/instances_val2017.json'
-    val_img_nums = 500
-    val_coco_json = './data/instances_train2017.json'
+    train_img_nums = 10000
+    train_coco_json = './data/instances_train2017.json'
+    val_img_nums = 1000
+    val_coco_json = './data/instances_val2017.json'
 
     # 类别名, 也可以自己提供一个数组, 不通过coco
     classes = ['none', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
@@ -58,7 +58,8 @@ def main():
         include_crowd=False,
         include_keypoint=False,
         need_down_image=False,
-        using_argument=True
+        using_argument=False,
+        download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
     )
     # val_coco_data = CoCoDataGenrator(
     #     coco_annotation_file= val_coco_json,
@@ -84,7 +85,7 @@ def main():
         include_keypoint=False,
         need_down_image=False,
         using_argument=False,
-        download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
+        # download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
     )
 
     yolact = Yolact(
@@ -96,7 +97,7 @@ def main():
         nms_thres=0.5
     )
     yolact.model.summary(line_length=200)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0005)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
     # optimizer = tf.keras.optimizers.SGD(learning_rate=0.0001)
     # optimizer = tf.keras.optimizers.Adadelta(learning_rate=0.001)
     # optimizer = tf.keras.optimizers.Nadam(learning_rate=0.001)
