@@ -9,6 +9,7 @@ import random
 import tensorflow as tf
 from data.visual_ops import draw_bounding_box, draw_instance
 from data.generate_coco_data import CoCoDataGenrator
+from data.dataloader import create_dataloader
 from loss import MultiBoxLoss
 from yolact import Yolact
 from box_utils import detect,decode
@@ -18,6 +19,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 abs_file_path = os.path.dirname(os.path.abspath(__file__))
 
+
 def main():
     epochs = 500
     log_dir = './logs'
@@ -25,7 +27,7 @@ def main():
     assert (image_shape[0] % 8 == 0) & (image_shape[1] % 8 == 0), "image shape 必须为8的整数倍"
     # 类别数
     num_class = 91
-    batch_size = 5
+    batch_size = 3
     # -1表示全部数据参与训练, 拿val数据共5k训练, 拿train数据500个验证
     train_img_nums = 10000
     train_coco_json = './data/instances_train2017.json'
@@ -61,18 +63,8 @@ def main():
         using_argument=False,
         download_image_path=os.path.join(abs_file_path, "data", "coco_2017_val_images", "train2017")
     )
-    # val_coco_data = CoCoDataGenrator(
-    #     coco_annotation_file= val_coco_json,
-    #     train_img_nums=val_img_nums,
-    #     img_shape=image_shape,
-    #     batch_size=batch_size,
-    #     max_instances=40,
-    #     include_mask=True,
-    #     include_crowd=False,
-    #     include_keypoint=False,
-    #     need_down_image=False,
-    #     using_argument=False
-    # )
+    coco_dataloader = create_dataloader(coco_data, num_worker=1)
+
     # 验证集
     val_coco_data = CoCoDataGenrator(
         coco_annotation_file=val_coco_json,
@@ -118,15 +110,21 @@ def main():
 
     pre_mAP = 0.
     for epoch in range(epochs):
-        train_progress_bar = tqdm.tqdm(range(coco_data.total_batch_size), desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
-        for batch in train_progress_bar:
+        # train_progress_bar = tqdm.tqdm(range(coco_data.total_batch_size), desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
+        train_progress_bar = tqdm.tqdm(enumerate(coco_dataloader), total=coco_data.total_batch_size, desc="train epoch {}/{}".format(epoch, epochs-1), ncols=100)
+        # for batch in train_progress_bar:
+        for batch, data in train_progress_bar:
             with tf.GradientTape() as tape:
-                data = coco_data.next_batch()
-                valid_nums = data['valid_nums']
-                gt_imgs = np.array(data['imgs'] / 255., dtype=np.float32)
-                gt_boxes = [data['bboxes'][i][:valid_num] / image_shape[0] for i,valid_num in enumerate(valid_nums)]
-                gt_labels = [data['labels'][i][:valid_num] for i,valid_num in enumerate(valid_nums)]
-                gt_masks = [data['masks'][i][:,:,:valid_num] for i,valid_num in enumerate(valid_nums)]
+                # data = coco_data.next_batch()
+                valid_nums = data['valid_nums'][0].cpu().numpy()
+                gt_imgs = data['imgs'][0].cpu().numpy() / 255.
+                gt_boxes = data['bboxes'][0].cpu().numpy()
+                gt_labels = data['labels'][0].cpu().numpy()
+                gt_masks = data['masks'][0].cpu().numpy()
+
+                gt_boxes = [gt_boxes[i][:valid_num] / image_shape[0] for i,valid_num in enumerate(valid_nums)]
+                gt_labels = [gt_labels[i][:valid_num] for i,valid_num in enumerate(valid_nums)]
+                gt_masks = [gt_masks[i][:,:,:valid_num] for i,valid_num in enumerate(valid_nums)]
 
                 # print("-------epoch {}, step {}, total step {}--------".format(epoch, batch,
                 #                                                                epoch * coco_data.total_batch_size + batch))
@@ -208,7 +206,7 @@ def main():
                                      step=epoch * coco_data.total_batch_size + batch)
         # 这里计算一下训练集的mAP
         # val(model=yolact, val_data_generator=coco_data, classes=classes, desc='training dataset val')
-        # # 这里计算验证集的mAP
+        # 这里计算验证集的mAP
         mAP50, mAP, final_df = val(model=yolact, val_data_generator=val_coco_data, classes=classes, desc='val dataset val')
         if mAP > pre_mAP:
             pre_mAP = mAP

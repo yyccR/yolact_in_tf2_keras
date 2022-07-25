@@ -234,8 +234,12 @@ class Arugments:
                     if np.sum(m) > self.mosaic_min_mask_area:
                         out_masks.append(m[None, :, :])
                         out_boxes.append([boxes[i]])
-                masks = np.concatenate(out_masks, axis=0)
-                boxes = np.concatenate(out_boxes, axis=0)
+                if len(out_boxes) > 0 :
+                    masks = np.concatenate(out_masks, axis=0)
+                    boxes = np.concatenate(out_boxes, axis=0)
+                else:
+                    masks = []
+                    boxes = []
 
         return im, boxes, masks
 
